@@ -180,6 +180,30 @@ public class OrdersApiTests : IDisposable
         page.TotalCount.Should().BeGreaterThan(0);
     }
 
+    [PostgresFact]
+    public async Task Listing_can_be_filtered_by_status()
+    {
+        var client = _factory.CreateClient();
+        var created = await CreateOrderAsync(client);
+        await client.PostAsync($"/api/orders/{created.Id}/cancel", null);
+
+        var response = await client.GetAsync("/api/orders?status=cancelled&pageSize=50");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var page = await response.Content.ReadFromJsonAsync<PagedResult<OrderSummaryDto>>();
+        page!.Items.Should().OnlyContain(o => o.Status == "Cancelled");
+    }
+
+    [PostgresFact]
+    public async Task An_unknown_status_filter_is_rejected()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync("/api/orders?status=teleported");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     private async Task<OrderDto> CreateOrderAsync(HttpClient client)
     {
         var request = await BuildRequestAsync();

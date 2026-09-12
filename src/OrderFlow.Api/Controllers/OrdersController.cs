@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using OrderFlow.Contracts;
 using OrderFlow.Contracts.Dtos;
 using OrderFlow.Infrastructure.Services;
 
@@ -78,6 +79,7 @@ public class OrdersController : ControllerBase
     public async Task<IActionResult> List(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25,
+        [FromQuery] string? status = null,
         CancellationToken ct = default)
     {
         if (page < 1)
@@ -90,7 +92,19 @@ public class OrdersController : ControllerBase
             pageSize = 25;
         }
 
-        var result = await _orders.ListAsync(page, pageSize, ct);
+        OrderStatus? statusFilter = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!Enum.TryParse<OrderStatus>(status, ignoreCase: true, out var parsed))
+            {
+                ModelState.AddModelError(nameof(status), $"'{status}' is not a known order status.");
+                return ValidationProblem(ModelState);
+            }
+
+            statusFilter = parsed;
+        }
+
+        var result = await _orders.ListAsync(page, pageSize, statusFilter, ct);
         return Ok(result);
     }
 

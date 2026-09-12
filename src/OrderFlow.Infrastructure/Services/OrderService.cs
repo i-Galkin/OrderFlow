@@ -81,8 +81,17 @@ public class OrderService
         return order?.ToDto();
     }
 
-    public async Task<PagedResult<OrderSummaryDto>> ListAsync(int page, int pageSize, CancellationToken ct)
+    public async Task<PagedResult<OrderSummaryDto>> ListAsync(
+        int page,
+        int pageSize,
+        OrderStatus? status,
+        CancellationToken ct)
     {
+        if (status is not null)
+        {
+            return await ListByStatusAsync(page, pageSize, status.Value, ct);
+        }
+
         var query = _db.Orders.AsNoTracking();
 
         var totalCount = await query.CountAsync(ct);
@@ -100,6 +109,39 @@ public class OrderService
             Page = page,
             PageSize = pageSize,
             TotalCount = totalCount
+        };
+    }
+
+    /// <summary>
+    /// Status filtered listing. Operations use this to work through a backlog, so the
+    /// summaries have to include the item counts, which means the items travel with the
+    /// rows and the page is cut once the result set is in hand.
+    /// </summary>
+    private async Task<PagedResult<OrderSummaryDto>> ListByStatusAsync(
+        int page,
+        int pageSize,
+        OrderStatus status,
+        CancellationToken ct)
+    {
+        var matching = await _db.Orders
+            .AsNoTracking()
+            .Include(o => o.Items)
+            .Where(o => o.Status == status)
+            .OrderByDescending(o => o.CreatedAt)
+            .ToListAsync(ct);
+
+        var items = matching
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(o => o.ToSummaryDto())
+            .ToList();
+
+        return new PagedResult<OrderSummaryDto>
+        {
+            Items = items,
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = matching.Count
         };
     }
 
