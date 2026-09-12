@@ -2,7 +2,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using OrderFlow.Contracts;
 using OrderFlow.Contracts.Dtos;
+using OrderFlow.Contracts.Events;
 using OrderFlow.Infrastructure.Domain;
+using OrderFlow.Infrastructure.Messaging;
 using OrderFlow.Infrastructure.Persistence;
 
 namespace OrderFlow.Infrastructure.Services;
@@ -13,11 +15,13 @@ namespace OrderFlow.Infrastructure.Services;
 public class OrderService
 {
     private readonly OrderFlowDbContext _db;
+    private readonly IOrderEventPublisher _publisher;
     private readonly ILogger<OrderService> _logger;
 
-    public OrderService(OrderFlowDbContext db, ILogger<OrderService> logger)
+    public OrderService(OrderFlowDbContext db, IOrderEventPublisher publisher, ILogger<OrderService> logger)
     {
         _db = db;
+        _publisher = publisher;
         _logger = logger;
     }
 
@@ -50,6 +54,11 @@ public class OrderService
         var order = Order.Create(customer.Id, items);
 
         _db.Orders.Add(order);
+
+        // Emit OrderCreated as part of the same logical operation: consumers of the topic
+        // should learn about the order at the moment it is written.
+        await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCreated), ct);
+
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
@@ -101,6 +110,8 @@ public class OrderService
         order.Confirm();
         await _db.SaveChangesAsync(ct);
 
+        await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderConfirmed), ct);
+
         _logger.LogInformation("Order {OrderId} confirmed", order.Id);
         return order.ToDto();
     }
@@ -111,6 +122,8 @@ public class OrderService
 
         order.Cancel();
         await _db.SaveChangesAsync(ct);
+
+        await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCancelled), ct);
 
         _logger.LogInformation("Order {OrderId} cancelled", order.Id);
         return order.ToDto();
@@ -124,6 +137,12 @@ public class OrderService
         {
             throw new DomainException($"Order {order.Id} is {order.Status} and cannot be retried.");
         }
+
+        // Re-publishing the confirmation is what kicks the worker off again; the worker owns
+        // the Failed -> Processing transition.
+        await _publisher.PublishAsync(
+            OrderEventFactory.From(order, OrderEventTypes.OrderConfirmed, attempt: 1, reason: "manual-retry"),
+            ct);
 
         _logger.LogInformation("Retry requested for failed order {OrderId}", order.Id);
         return order.ToDto();
