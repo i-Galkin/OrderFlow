@@ -30,7 +30,7 @@ builder.Services
     });
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddOpenApi();
 
 builder.Services.AddOrderFlowPersistence(builder.Configuration);
 builder.Services.AddOrderFlowMessaging(builder.Configuration);
@@ -66,8 +66,7 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    app.MapOpenApi();
 }
 
 app.MapControllers();
