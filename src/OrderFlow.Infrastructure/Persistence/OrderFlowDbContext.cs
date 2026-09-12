@@ -17,6 +17,10 @@ public class OrderFlowDbContext : DbContext
 
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
 
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
+
+    public DbSet<InventoryReservation> InventoryReservations => Set<InventoryReservation>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Customer>(b =>
@@ -81,6 +85,26 @@ public class OrderFlowDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
 
             b.HasIndex(i => i.OrderId).HasDatabaseName("ix_order_items_order_id");
+        });
+
+        modelBuilder.Entity<ProcessedEvent>(b =>
+        {
+            b.ToTable("processed_events");
+            b.HasKey(e => e.EventId);
+            b.Property(e => e.EventType).HasMaxLength(64).IsRequired();
+            b.Property(e => e.ProcessedAt).HasColumnType("timestamp with time zone");
+            b.HasIndex(e => e.OrderId).HasDatabaseName("ix_processed_events_order_id");
+        });
+
+        modelBuilder.Entity<InventoryReservation>(b =>
+        {
+            b.ToTable("inventory_reservations");
+            b.HasKey(r => r.Id);
+            b.Property(r => r.CreatedAt).HasColumnType("timestamp with time zone");
+            b.HasIndex(r => r.OrderId).HasDatabaseName("ix_inventory_reservations_order_id");
+            b.HasIndex(r => new { r.OrderId, r.ProductId })
+                .IsUnique()
+                .HasDatabaseName("ux_inventory_reservations_order_product");
         });
 
         base.OnModelCreating(modelBuilder);
