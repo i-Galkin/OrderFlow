@@ -155,6 +155,23 @@ public class OrdersApiTests : IDisposable
     }
 
     [PostgresFact]
+    public async Task Cancelling_a_confirmed_order_is_accepted()
+    {
+        var client = _factory.CreateClient();
+        var created = await CreateOrderAsync(client);
+        (await client.PostAsync($"/api/orders/{created.Id}/confirm", null)).EnsureSuccessStatusCode();
+
+        var response = await client.PostAsync($"/api/orders/{created.Id}/cancel", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var cancelled = await response.Content.ReadFromJsonAsync<OrderDto>();
+        cancelled!.Status.Should().Be("Cancelled");
+
+        _factory.Publisher.EventsOfType(OrderEventTypes.OrderCancelled)
+            .Should().Contain(e => e.OrderId == created.Id);
+    }
+
+    [PostgresFact]
     public async Task Retrying_an_order_that_has_not_failed_is_rejected()
     {
         var client = _factory.CreateClient();

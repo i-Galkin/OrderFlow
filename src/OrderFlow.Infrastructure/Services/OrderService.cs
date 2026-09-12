@@ -162,7 +162,19 @@ public class OrderService
     {
         var order = await LoadForUpdateAsync(id, ct);
 
-        order.Cancel();
+        if (order.Status == OrderStatus.Confirmed)
+        {
+            // Support has to be able to pull an order back after it has been confirmed but
+            // before the worker has started on it; the worker releases the stock when it
+            // sees OrderCancelled.
+            order.Status = OrderStatus.Cancelled;
+            order.UpdatedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            order.Cancel();
+        }
+
         await _db.SaveChangesAsync(ct);
 
         await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCancelled), ct);
