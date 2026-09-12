@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using OrderFlow.Api.Middleware;
+using OrderFlow.Infrastructure.Caching;
 using OrderFlow.Infrastructure.Messaging;
 using OrderFlow.Infrastructure.Persistence;
 using OrderFlow.Infrastructure.Services;
@@ -27,6 +28,7 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddOrderFlowPersistence(builder.Configuration);
 builder.Services.AddOrderFlowMessaging(builder.Configuration);
+builder.Services.AddOrderFlowCaching(builder.Configuration);
 builder.Services.AddOrderFlowServices();
 
 var app = builder.Build();
