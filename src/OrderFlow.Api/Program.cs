@@ -8,6 +8,7 @@ using OrderFlow.Infrastructure.Caching;
 using OrderFlow.Infrastructure.Health;
 using OrderFlow.Infrastructure.Messaging;
 using OrderFlow.Infrastructure.Persistence;
+using OrderFlow.Infrastructure.Seeding;
 using OrderFlow.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,6 +39,19 @@ builder.Services.AddOrderFlowServices();
 builder.Services.AddOrderFlowHealthChecks();
 
 var app = builder.Build();
+
+if (args.Contains("--seed"))
+{
+    using var seedScope = app.Services.CreateScope();
+    var seedDb = seedScope.ServiceProvider.GetRequiredService<OrderFlowDbContext>();
+    await seedDb.Database.MigrateAsync();
+
+    var generator = new SeedDataGenerator(
+        seedDb,
+        seedScope.ServiceProvider.GetRequiredService<ILogger<SeedDataGenerator>>());
+    await generator.SeedAsync();
+    return;
+}
 
 if (app.Configuration.GetValue<bool>("OrderFlow:ApplyMigrationsOnStartup"))
 {
