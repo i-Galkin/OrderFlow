@@ -5,6 +5,15 @@ using OrderFlow.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.UseUtcTimestamp = true;
+    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+    options.JsonWriterOptions = new System.Text.Json.JsonWriterOptions { Indented = false };
+});
+
 builder.Services
     .AddControllers()
     .AddJsonOptions(options =>
@@ -20,6 +29,7 @@ builder.Services.AddOrderFlowServices();
 
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 if (app.Environment.IsDevelopment())
