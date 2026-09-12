@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using OrderFlow.Api.Middleware;
 using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OrderFlow.Infrastructure.Caching;
 using OrderFlow.Infrastructure.Health;
@@ -37,6 +38,14 @@ builder.Services.AddOrderFlowServices();
 builder.Services.AddOrderFlowHealthChecks();
 
 var app = builder.Build();
+
+if (app.Configuration.GetValue<bool>("OrderFlow:ApplyMigrationsOnStartup"))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<OrderFlowDbContext>();
+    await db.Database.MigrateAsync();
+    app.Logger.LogInformation("Database migrations applied");
+}
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
