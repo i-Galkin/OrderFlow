@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using OrderFlow.Api.Middleware;
+using Scalar.AspNetCore;
 using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
@@ -67,6 +68,7 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 app.MapControllers();
