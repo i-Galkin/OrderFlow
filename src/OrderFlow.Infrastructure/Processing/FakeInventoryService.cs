@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using OrderFlow.Contracts.Events;
 using OrderFlow.Infrastructure.Domain;
+using OrderFlow.Infrastructure.Observability;
 using OrderFlow.Infrastructure.Persistence;
 using StackExchange.Redis;
 
@@ -40,11 +41,13 @@ public sealed class FakeInventoryService : IInventoryService
         {
             if (!products.TryGetValue(item.ProductId, out var product))
             {
+                OrderFlowMetrics.RecordReservation(OrderFlowMetrics.ReservationResults.ProductNotFound);
                 throw new NotFoundException("Product", item.ProductId);
             }
 
             if (product.StockQuantity < item.Quantity)
             {
+                OrderFlowMetrics.RecordReservation(OrderFlowMetrics.ReservationResults.InsufficientStock);
                 throw new InsufficientStockException(item.ProductId, item.Quantity, product.StockQuantity);
             }
         }
@@ -73,6 +76,7 @@ public sealed class FakeInventoryService : IInventoryService
         }
 
         await _db.SaveChangesAsync(ct);
+        OrderFlowMetrics.RecordReservation(OrderFlowMetrics.ReservationResults.Reserved);
 
         _logger.LogInformation(
             "Reserved {LineCount} lines for order {OrderId}",
@@ -103,6 +107,7 @@ public sealed class FakeInventoryService : IInventoryService
 
         _db.InventoryReservations.RemoveRange(reservations);
         await _db.SaveChangesAsync(ct);
+        OrderFlowMetrics.RecordRelease();
 
         _logger.LogInformation("Released {Count} reservations for order {OrderId}", reservations.Count, orderId);
     }

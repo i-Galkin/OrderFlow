@@ -4,6 +4,7 @@ using OrderFlow.Contracts;
 using OrderFlow.Contracts.Events;
 using OrderFlow.Infrastructure.Domain;
 using OrderFlow.Infrastructure.Messaging;
+using OrderFlow.Infrastructure.Observability;
 using OrderFlow.Infrastructure.Persistence;
 
 namespace OrderFlow.Infrastructure.Processing;
@@ -43,6 +44,7 @@ public sealed class OrderEventProcessor
 
         if (alreadyProcessed)
         {
+            OrderFlowMetrics.RecordDuplicateSkipped(orderEvent.EventType);
             _logger.LogInformation(
                 "Skipping duplicate delivery of event {EventId} for order {OrderId}",
                 orderEvent.EventId, orderEvent.OrderId);
@@ -92,13 +94,24 @@ public sealed class OrderEventProcessor
                 "Resuming order {OrderId} on attempt {Attempt} with an existing reservation",
                 order.Id, orderEvent.Attempt);
 
+            var restartedFromFailed = false;
             if (order.Status == OrderStatus.Failed)
             {
                 order.StartProcessing();
+                restartedFromFailed = true;
             }
 
             order.Complete();
             await _db.SaveChangesAsync(ct);
+
+            OrderFlowMetrics.RecordResumedWithReservation();
+            if (restartedFromFailed)
+            {
+                OrderFlowMetrics.RecordStatusChange(OrderStatus.Processing, OrderFlowMetrics.Sources.Worker);
+            }
+
+            OrderFlowMetrics.RecordStatusChange(OrderStatus.Completed, OrderFlowMetrics.Sources.Worker);
+
             await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCompleted), ct);
             return;
         }
@@ -107,6 +120,7 @@ public sealed class OrderEventProcessor
 
         order.StartProcessing();
         await _db.SaveChangesAsync(ct);
+        OrderFlowMetrics.RecordStatusChange(OrderStatus.Processing, OrderFlowMetrics.Sources.Worker);
         await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderProcessingStarted), ct);
 
         var payment = await _payments.ChargeAsync(order.Id, order.CustomerId, order.TotalAmount, ct);
@@ -116,6 +130,7 @@ public sealed class OrderEventProcessor
             case PaymentOutcome.Success:
                 order.Complete();
                 await _db.SaveChangesAsync(ct);
+                OrderFlowMetrics.RecordStatusChange(OrderStatus.Completed, OrderFlowMetrics.Sources.Worker);
                 await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCompleted), ct);
                 _logger.LogInformation(
                     "Order {OrderId} completed with authorization {AuthorizationCode}",
@@ -128,6 +143,7 @@ public sealed class OrderEventProcessor
             default:
                 order.Fail(payment.Reason ?? "payment_declined");
                 await _db.SaveChangesAsync(ct);
+                OrderFlowMetrics.RecordStatusChange(OrderStatus.Failed, OrderFlowMetrics.Sources.Worker);
                 await _publisher.PublishAsync(
                     OrderEventFactory.From(order, OrderEventTypes.OrderFailed, orderEvent.Attempt, payment.Reason),
                     ct);
@@ -167,6 +183,7 @@ public sealed class OrderEventProcessor
             // The primary key on processed_events is the event id, so a clash simply means
             // another delivery of the same event beat us to it.
             _db.ChangeTracker.Clear();
+            OrderFlowMetrics.RecordMarkProcessedConflict();
             _logger.LogDebug("Event {EventId} was already recorded as processed", orderEvent.EventId);
         }
     }

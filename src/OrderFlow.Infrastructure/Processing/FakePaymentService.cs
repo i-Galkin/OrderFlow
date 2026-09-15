@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using OrderFlow.Infrastructure.Observability;
 
 namespace OrderFlow.Infrastructure.Processing;
 
@@ -42,6 +43,8 @@ public sealed class FakePaymentService : IPaymentService
         {
             result = PaymentResult.Success($"AUTH-{orderId.ToString("N")[..8].ToUpperInvariant()}");
         }
+
+        OrderFlowMetrics.RecordPayment(result.Outcome.ToString(), result.Reason);
 
         _logger.LogDebug(
             "Payment for order {OrderId} of {Amount} resolved as {Outcome}",

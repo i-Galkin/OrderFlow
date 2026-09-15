@@ -91,3 +91,34 @@ jobs:
         with:
           name: test-results
           path: ./TestResults
+
+  observability-config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Image tags match docker-compose.yml so CI validates what the stack actually runs.
+      - name: Prometheus config and alert rules
+        run: >
+          docker run --rm --entrypoint promtool
+          -v "$PWD/observability/prometheus:/etc/prometheus:ro"
+          prom/prometheus:v3.5.0
+          check config /etc/prometheus/prometheus.yml
+
+      - name: Loki config
+        run: >
+          docker run --rm
+          -v "$PWD/observability/loki/loki.yml:/etc/loki/loki.yml:ro"
+          grafana/loki:3.5.3
+          -config.file=/etc/loki/loki.yml -verify-config
+
+      - name: Alloy config
+        run: >
+          docker run --rm
+          -v "$PWD/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro"
+          grafana/alloy:v1.10.2
+          fmt /etc/alloy/config.alloy
+
+      - name: Grafana dashboards are valid JSON
+        run: for f in observability/grafana/dashboards/*.json; do jq empty "$f"; done

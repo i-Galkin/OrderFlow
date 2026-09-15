@@ -69,6 +69,7 @@ services:
       Redis__Configuration: "redis:6379"
       Kafka__BootstrapServers: "kafka:29092"
       OrderFlow__ApplyMigrationsOnStartup: "true"
+      Observability__Enabled: "true"
     ports:
       - "8080:8080"
     healthcheck:
@@ -96,6 +97,72 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=orderflow;Username=orderflow;Password=orderflow;Maximum Pool Size=30"
       Redis__Configuration: "redis:6379"
       Kafka__BootstrapServers: "kafka:29092"
+      Observability__Enabled: "true"
+      Observability__MetricsHost: "*"
+      Observability__MetricsPort: "9464"
+
+  # --- Observability: nothing above depends on these, so the apps run the same without them.
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:3.5.3
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+
+  alloy:
+    image: grafana/alloy:v1.10.2
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    ports:
+      - "12345:12345"
+    depends_on:
+      - loki
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
 
 volumes:
   pgdata:
+  prometheus-data:
+  loki-data:
+  alloy-data:
+  grafana-data:

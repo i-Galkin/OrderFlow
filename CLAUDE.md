@@ -14,7 +14,7 @@ dotnet test OrderFlow.sln --filter "FullyQualifiedName~OrderFlow.Tests.Unit"
 Infrastructure and applications (.NET 10 SDK, Docker):
 
 ```bash
-docker compose up -d --build            # postgres, redis, kafka, api (:8080), worker
+docker compose up -d --build            # postgres, redis, kafka, api (:8080), worker + prometheus (:9090), loki, alloy, grafana (:3000)
 docker compose up -d postgres redis kafka   # deps only, then run the apps from source
 dotnet run --project src/OrderFlow.Api
 dotnet run --project src/OrderFlow.Worker
@@ -138,6 +138,29 @@ worker opens a correlation + logging scope per message. Anything that logs insid
 message handler picks it up automatically — do not thread it through signatures. Use the
 `CorrelationContext` constants for header names: the consumer currently reads a hard-coded
 `correlationId`, which does not match the producer.
+
+### Observability
+
+OpenTelemetry metrics are exported in Prometheus format (API: `/metrics` on :8080; worker: an
+HttpListener on :9464). Logs reach Loki through Grafana Alloy tailing container stdout, so logging
+code stays as it is. Config, dashboards and alert rules live under `observability/`;
+`docs/observability.md` has the metric catalogue and runbooks.
+
+* Custom instruments belong in the static `Infrastructure/Observability/OrderFlowMetrics` (same
+  pattern as `CorrelationContext`), so instrumented services keep their constructors. Record only,
+  and only after the operation succeeds: never swallow, never change control flow. Tag values must
+  come from a closed set; no ids of any kind.
+* Dashboards and alerts query the Prometheus names, not the OTel names: `.` becomes `_`, counters
+  gain `_total`, units add a suffix (`orderflow.worker.last_poll` with unit `s` →
+  `orderflow_worker_last_poll_seconds`). Renaming an instrument breaks them.
+* The dashboard JSON under `observability/grafana/dashboards/` is provisioned read-only; edit it in
+  the repo.
+* Consumer lag comes from `Worker/KafkaLagMonitor` (a separate admin client, cluster-wide
+  metadata only, so it never triggers topic auto-creation). Health gauges update only when
+  `/health*` is polled; do not add an `IHealthCheckPublisher`, which would run the Kafka check on a
+  timer.
+* The HttpListener exporter rejects `*`/`+` as `Host`; `Worker/Program.cs` works around it with
+  `ConfigureHttpListener`. `/metrics` and `/health*` call `DisableHttpMetrics()`.
 
 ### Deterministic stubs
 

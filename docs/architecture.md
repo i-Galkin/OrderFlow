@@ -166,6 +166,27 @@ Both applications log JSON to stdout with scopes enabled, which is what the log 
 Every log line inside a request or a message carries `CorrelationId`; the worker adds `Topic`,
 `Partition` and `Offset`.
 
+Metrics are OpenTelemetry instruments exported in Prometheus format: the API serves `/metrics` on
+its HTTP port, the worker runs a small listener on `:9464`. Logs are picked up from container
+stdout by Grafana Alloy and stored in Loki. Grafana reads both. None of the application containers
+depend on the monitoring stack.
+
+```mermaid
+flowchart LR
+    api[OrderFlow.Api] -->|/metrics :8080| prom[(Prometheus)]
+    worker[OrderFlow.Worker] -->|/metrics :9464| prom
+    api -. stdout JSON .-> alloy[Grafana Alloy]
+    worker -. stdout JSON .-> alloy
+    alloy -->|push| loki[(Loki)]
+    prom -->|alerts.yml| prom
+    prom --> grafana[Grafana]
+    loki --> grafana
+    lag[KafkaLagMonitor] -->|committed vs end offsets| kafka{{orders.events}}
+    worker --- lag
+```
+
+Metric catalogue, dashboards, alert runbooks and log queries: [observability.md](observability.md).
+
 ## Health
 
 | Endpoint | Checks |

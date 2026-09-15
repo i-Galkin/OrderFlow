@@ -5,6 +5,7 @@ using OrderFlow.Contracts.Dtos;
 using OrderFlow.Contracts.Events;
 using OrderFlow.Infrastructure.Domain;
 using OrderFlow.Infrastructure.Messaging;
+using OrderFlow.Infrastructure.Observability;
 using OrderFlow.Infrastructure.Persistence;
 
 namespace OrderFlow.Infrastructure.Services;
@@ -60,6 +61,7 @@ public class OrderService
         await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCreated), ct);
 
         await _db.SaveChangesAsync(ct);
+        OrderFlowMetrics.RecordOrderCreated(order.TotalAmount);
 
         _logger.LogInformation(
             "Created order {OrderId} for customer {CustomerId} with {ItemCount} items totalling {TotalAmount}",
@@ -151,6 +153,7 @@ public class OrderService
 
         order.Confirm();
         await _db.SaveChangesAsync(ct);
+        OrderFlowMetrics.RecordStatusChange(OrderStatus.Confirmed, OrderFlowMetrics.Sources.Api);
 
         await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderConfirmed), ct);
 
@@ -176,6 +179,7 @@ public class OrderService
         }
 
         await _db.SaveChangesAsync(ct);
+        OrderFlowMetrics.RecordStatusChange(OrderStatus.Cancelled, OrderFlowMetrics.Sources.Api);
 
         await _publisher.PublishAsync(OrderEventFactory.From(order, OrderEventTypes.OrderCancelled), ct);
 
@@ -197,6 +201,7 @@ public class OrderService
         await _publisher.PublishAsync(
             OrderEventFactory.From(order, OrderEventTypes.OrderConfirmed, attempt: 1, reason: "manual-retry"),
             ct);
+        OrderFlowMetrics.RecordManualRetry();
 
         _logger.LogInformation("Retry requested for failed order {OrderId}", order.Id);
         return order.ToDto();

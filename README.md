@@ -45,6 +45,14 @@ dotnet run --project src/OrderFlow.Api
 dotnet run --project src/OrderFlow.Worker
 ```
 
+## Observability
+
+The compose file also starts Prometheus (<http://localhost:9090>), Loki, Grafana Alloy and Grafana
+(<http://localhost:3000>, `admin`/`admin`). Grafana has provisioned dashboards (Overview, Worker &
+Kafka, Logs), and Prometheus loads alert rules. The API serves metrics on `/metrics`; the worker
+serves them on port `9464`. See [docs/observability.md](docs/observability.md) for the metric
+catalogue, log queries and alert runbooks.
+
 ## Seed data
 
 ```bash
@@ -143,3 +151,6 @@ Every setting can be overridden with environment variables using the usual `__` 
 | `Kafka__MaxRetryAttempts` | `3` | retries before dead lettering |
 | `Kafka__RetryBaseDelaySeconds` | `2` | base delay for the retry backoff |
 | `OrderFlow__ApplyMigrationsOnStartup` | `false` | run migrations when the API starts |
+| `Observability__Enabled` | `true` | OpenTelemetry metrics and the `/metrics` endpoint |
+| `Observability__MetricsHost` / `Observability__MetricsPort` | `localhost` / `9464` | worker metrics listener |
+| `Observability__ConsumerLagPollSeconds` | `15` | worker consumer lag sampling, `0` disables |

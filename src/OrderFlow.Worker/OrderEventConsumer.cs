@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
@@ -56,7 +57,10 @@ public sealed class OrderEventConsumer : BackgroundService
 
         using var consumer = new ConsumerBuilder<string, string>(config)
             .SetErrorHandler((_, error) =>
-                _logger.LogWarning("Kafka consumer error {Code}: {Reason}", error.Code, error.Reason))
+            {
+                OrderFlowMetrics.RecordKafkaClientError("consumer", error.IsFatal);
+                _logger.LogWarning("Kafka consumer error {Code}: {Reason}", error.Code, error.Reason);
+            })
             .Build();
 
         consumer.Subscribe(_options.Topic);
@@ -69,6 +73,8 @@ public sealed class OrderEventConsumer : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            OrderFlowMetrics.MarkConsumerPoll();
+
             ConsumeResult<string, string>? result;
             try
             {
@@ -76,6 +82,7 @@ public sealed class OrderEventConsumer : BackgroundService
             }
             catch (ConsumeException ex)
             {
+                OrderFlowMetrics.RecordConsumeError();
                 _logger.LogWarning(ex, "Consume failed: {Reason}", ex.Error.Reason);
                 continue;
             }
@@ -97,7 +104,16 @@ public sealed class OrderEventConsumer : BackgroundService
         ConsumeResult<string, string> result,
         CancellationToken ct)
     {
-        var correlationId = ReadCorrelationId(result.Message.Headers) ?? Guid.NewGuid().ToString("N");
+        var started = Stopwatch.GetTimestamp();
+        var outcome = OrderFlowMetrics.MessageOutcomes.Error;
+
+        var headerCorrelationId = ReadCorrelationId(result.Message.Headers);
+        if (headerCorrelationId is null)
+        {
+            OrderFlowMetrics.RecordCorrelationIdGenerated();
+        }
+
+        var correlationId = headerCorrelationId ?? Guid.NewGuid().ToString("N");
         using var correlationScope = CorrelationContext.BeginScope(correlationId);
         using var loggerScope = _logger.BeginScope(new Dictionary<string, object>
         {
@@ -110,66 +126,89 @@ public sealed class OrderEventConsumer : BackgroundService
         OrderEvent? orderEvent = null;
         try
         {
-            orderEvent = JsonSerializer.Deserialize<OrderEvent>(result.Message.Value, SerializerOptions);
-            if (orderEvent is null)
+            try
             {
-                throw new InvalidOperationException("Event payload deserialized to null.");
-            }
+                orderEvent = JsonSerializer.Deserialize<OrderEvent>(result.Message.Value, SerializerOptions);
+                if (orderEvent is null)
+                {
+                    throw new InvalidOperationException("Event payload deserialized to null.");
+                }
 
-            if (_handledEvents.Contains(orderEvent.EventId))
-            {
-                _logger.LogInformation("Event {EventId} already handled by this instance", orderEvent.EventId);
+                if (_handledEvents.Contains(orderEvent.EventId))
+                {
+                    _logger.LogInformation("Event {EventId} already handled by this instance", orderEvent.EventId);
+                    consumer.Commit(result);
+                    outcome = OrderFlowMetrics.MessageOutcomes.DuplicateInMemory;
+                    return;
+                }
+
+                await processor.ProcessAsync(orderEvent, ct);
+
+                _handledEvents.Add(orderEvent.EventId);
                 consumer.Commit(result);
-                return;
+                outcome = OrderFlowMetrics.MessageOutcomes.Processed;
             }
+            catch (DomainException ex)
+            {
+                _logger.LogWarning(ex, "Permanent failure for order {OrderId}", orderEvent?.OrderId);
+                if (orderEvent is not null)
+                {
+                    await _publisher.PublishToDeadLetterAsync(orderEvent, ex.Message, ct);
+                    consumer.Commit(result);
+                    outcome = OrderFlowMetrics.MessageOutcomes.DeadLettered;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Processing failed for order {OrderId}, scheduling retry",
+                    orderEvent?.OrderId);
 
-            await processor.ProcessAsync(orderEvent, ct);
-
-            _handledEvents.Add(orderEvent.EventId);
-            consumer.Commit(result);
+                if (orderEvent is not null)
+                {
+                    var deadLettered = await ScheduleRetryAsync(orderEvent, ex.Message, ct);
+                    consumer.Commit(result);
+                    outcome = deadLettered
+                        ? OrderFlowMetrics.MessageOutcomes.DeadLettered
+                        : OrderFlowMetrics.MessageOutcomes.RetryScheduled;
+                }
+                else
+                {
+                    outcome = OrderFlowMetrics.MessageOutcomes.Unparseable;
+                }
+            }
         }
-        catch (DomainException ex)
+        finally
         {
-            _logger.LogWarning(ex, "Permanent failure for order {OrderId}", orderEvent?.OrderId);
-            if (orderEvent is not null)
-            {
-                await _publisher.PublishToDeadLetterAsync(orderEvent, ex.Message, ct);
-                consumer.Commit(result);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Processing failed for order {OrderId}, scheduling retry",
-                orderEvent?.OrderId);
-
-            if (orderEvent is not null)
-            {
-                await ScheduleRetryAsync(orderEvent, ex.Message, ct);
-                consumer.Commit(result);
-            }
+            OrderFlowMetrics.RecordMessageHandled(orderEvent?.EventType, outcome, Stopwatch.GetElapsedTime(started));
         }
     }
 
-    private async Task ScheduleRetryAsync(OrderEvent orderEvent, string reason, CancellationToken ct)
+    /// <returns><c>true</c> when the retry budget was exhausted and the event was dead lettered.</returns>
+    private async Task<bool> ScheduleRetryAsync(OrderEvent orderEvent, string reason, CancellationToken ct)
     {
         var attempt = _attempts.TryGetValue(orderEvent.OrderId, out var previous) ? previous + 1 : 1;
         _attempts[orderEvent.OrderId] = attempt;
 
         if (attempt > _options.MaxRetryAttempts)
         {
+            OrderFlowMetrics.RecordRetry(attempt, exhausted: true);
             await _publisher.PublishToDeadLetterAsync(orderEvent, reason, ct);
             _attempts.Remove(orderEvent.OrderId);
-            return;
+            return true;
         }
+
+        OrderFlowMetrics.RecordRetry(attempt, exhausted: false);
 
         var backoff = TimeSpan.FromSeconds(_options.RetryBaseDelaySeconds * attempt);
         _logger.LogInformation(
             "Retry {Attempt}/{MaxAttempts} for order {OrderId} in {Backoff}s",
             attempt, _options.MaxRetryAttempts, orderEvent.OrderId, backoff.TotalSeconds);
 
+        var backoffStarted = Stopwatch.GetTimestamp();
         await Task.Delay(backoff, ct);
+        OrderFlowMetrics.RecordRetryBackoff(Stopwatch.GetElapsedTime(backoffStarted));
 
         await _publisher.PublishAsync(new OrderEvent
         {
@@ -184,6 +223,8 @@ public sealed class OrderEventConsumer : BackgroundService
             Reason = reason,
             Items = orderEvent.Items
         }, ct);
+
+        return false;
     }
 
     private static string? ReadCorrelationId(Headers? headers)
