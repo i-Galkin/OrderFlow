@@ -186,7 +186,11 @@ public static class OrderFlowMetrics
     public static void RecordManualRetry() => ManualRetries.Add(1);
 
     public static void RecordApiError(Exception exception, int statusCode) =>
-        ApiErrors.Add(1, new("type", exception.GetType().Name), new("status_code", statusCode));
+        RecordApiError(exception.GetType().Name, statusCode);
+
+    /// <summary>Use this overload when the exception's own type name is not a closed set (e.g. the catch-all branch).</summary>
+    public static void RecordApiError(string type, int statusCode) =>
+        ApiErrors.Add(1, new("type", type), new("status_code", statusCode));
 
     public static void RecordProduced(string topic, string eventType) =>
         MessagesProduced.Add(1, new("topic", topic), new("event_type", NormalizeEventType(eventType)));

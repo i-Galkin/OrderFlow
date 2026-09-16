@@ -73,9 +73,14 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health/live || exit 1"]
+      # Container health is decided by /health/live alone (--max-time bounds the ready probe and
+      # its exit code is ignored, so a slow or failing dependency never fails the healthcheck).
+      # We also poll /health/ready here because there is deliberately no IHealthCheckPublisher:
+      # this is what refreshes the orderflow_health_check_status gauges for postgres and kafka
+      # every interval, so ApiNotReady has fresh data instead of a stale one-off manual probe.
+      test: ["CMD-SHELL", "curl -fsS --max-time 2 http://localhost:8080/health/ready >/dev/null 2>&1; curl -fsS http://localhost:8080/health/live || exit 1"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 20s
 

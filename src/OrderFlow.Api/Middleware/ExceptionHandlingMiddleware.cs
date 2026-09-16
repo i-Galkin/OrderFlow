@@ -61,7 +61,7 @@ public sealed class ExceptionHandlingMiddleware
         }
         catch (Exception ex)
         {
-            OrderFlowMetrics.RecordApiError(ex, StatusCodes.Status500InternalServerError);
+            OrderFlowMetrics.RecordApiError("unhandled", StatusCodes.Status500InternalServerError);
             _logger.LogError(ex, "Unhandled exception while processing {Method} {Path}",
                 context.Request.Method, context.Request.Path);
             await WriteProblemAsync(context, StatusCodes.Status500InternalServerError, "Unexpected error",

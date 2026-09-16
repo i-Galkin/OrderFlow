@@ -81,8 +81,27 @@ public sealed class KafkaLagMonitor : BackgroundService
         // Cluster-wide metadata rather than a per-topic request, so sampling can never trigger
         // broker-side topic auto-creation.
         var topic = admin.GetMetadata(RequestTimeout).Topics.FirstOrDefault(t => t.Topic == _kafka.Topic);
-        if (topic is null || topic.Error.IsError || topic.Partitions.Count == 0)
+        if (topic is null)
         {
+            // Simply absent (e.g. not created yet): report zero lag rather than a failed sample.
+            OrderFlowMetrics.SetConsumerLag(_kafka.Topic, new Dictionary<int, long>());
+            return;
+        }
+
+        if (topic.Error.IsError && topic.Error.Code != ErrorCode.UnknownTopicOrPart)
+        {
+            // A metadata error (e.g. LeaderNotAvailable) is a failed sample, not "no lag": don't
+            // clear the series and don't refresh the last-sample gauge, so ConsumerLagMonitorStale
+            // can still fire. Thrown so the caller's existing failed-sample handling applies.
+            // UnknownTopicOrPart is treated as simply absent, same as the null case above: it is
+            // usually how an absent topic actually comes back from cluster-wide metadata, often
+            // with an empty partition list too, which the check below alone would not catch.
+            throw new KafkaException(topic.Error);
+        }
+
+        if (topic.Partitions.Count == 0)
+        {
+            // Simply absent (e.g. not created yet): report zero lag rather than a failed sample.
             OrderFlowMetrics.SetConsumerLag(_kafka.Topic, new Dictionary<int, long>());
             return;
         }

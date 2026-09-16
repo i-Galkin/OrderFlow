@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrderFlow.Infrastructure.Observability;
@@ -66,6 +67,20 @@ public class OrderFlowMetricsTests
 
         collector.Measurements.Should().Contain(m =>
             Equals(m.Tags["outcome"], "test_outcome") && Equals(m.Tags["event_type"], "other"));
+    }
+
+    [Theory]
+    [InlineData("unhandled", StatusCodes.Status500InternalServerError)]
+    [InlineData("ValidationException", StatusCodes.Status400BadRequest)]
+    [InlineData("TimeoutException", StatusCodes.Status504GatewayTimeout)]
+    public void Api_errors_are_tagged_by_type_and_status_code(string errorType, int statusCode)
+    {
+        using var collector = new MeasurementCollector("orderflow.api.errors");
+
+        OrderFlowMetrics.RecordApiError(errorType, statusCode);
+
+        collector.Measurements.Should().ContainSingle().Which.Should().Match<Measurement>(m =>
+            m.Value == 1 && Equals(m.Tags["type"], errorType) && Equals(m.Tags["status_code"], statusCode));
     }
 
     public sealed record Measurement(double Value, IReadOnlyDictionary<string, object?> Tags);

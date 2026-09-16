@@ -47,9 +47,9 @@ public sealed class RedisProductCache : IProductCache
             OrderFlowMetrics.RecordCacheRequest(MetricsCacheName, OrderFlowMetrics.CacheResults.Hit);
             return JsonSerializer.Deserialize<ProductDto>(value.ToString(), SerializerOptions);
         }
-        catch (RedisConnectionException ex)
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
         {
-            // A cache outage must not take the read path down with it.
+            // A cache outage or timeout must not take the read path down with it.
             OrderFlowMetrics.RecordCacheRequest(MetricsCacheName, OrderFlowMetrics.CacheResults.Unavailable);
             _logger.LogWarning(ex, "Redis unavailable while reading product {ProductId}", productId);
             return null;
@@ -65,6 +65,12 @@ public sealed class RedisProductCache : IProductCache
                 CacheKey(product.Id),
                 payload,
                 TimeSpan.FromSeconds(_options.ProductTtlSeconds));
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is not a cache failure; let it propagate uncounted, as it did before
+            // this catch existed.
+            throw;
         }
         catch
         {

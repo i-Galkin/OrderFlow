@@ -48,16 +48,17 @@ public sealed class KafkaOrderEventPublisher : IOrderEventPublisher
     public Task PublishAsync(OrderEvent orderEvent, CancellationToken ct = default)
         => ProduceAsync(_options.Topic, orderEvent, ct);
 
-    public Task PublishToDeadLetterAsync(OrderEvent orderEvent, string reason, CancellationToken ct = default)
+    public async Task PublishToDeadLetterAsync(OrderEvent orderEvent, string reason, CancellationToken ct = default)
     {
         orderEvent.Reason = reason;
         _logger.LogWarning(
             "Routing event {EventId} ({EventType}) for order {OrderId} to {Topic}: {Reason}",
             orderEvent.EventId, orderEvent.EventType, orderEvent.OrderId, _options.DeadLetterTopic, reason);
 
-        OrderFlowMetrics.RecordDeadLettered(_options.DeadLetterTopic, orderEvent.EventType);
+        await ProduceAsync(_options.DeadLetterTopic, orderEvent, ct);
 
-        return ProduceAsync(_options.DeadLetterTopic, orderEvent, ct);
+        // Recorded only after the produce call returns without throwing, same as RecordProduced.
+        OrderFlowMetrics.RecordDeadLettered(_options.DeadLetterTopic, orderEvent.EventType);
     }
 
     private Task ProduceAsync(string topic, OrderEvent orderEvent, CancellationToken ct)

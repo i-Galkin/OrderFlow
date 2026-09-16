@@ -50,4 +50,25 @@ public class MetricsEndpointTests : IDisposable
         body.Should().NotContain("http_route=\"/metrics\"");
         body.Should().NotContain("http_route=\"/health/live\"");
     }
+
+    [PostgresFact]
+    public async Task Exports_prometheus_metric_names_that_alerts_depend_on()
+    {
+        var client = _factory.CreateClient();
+
+        // Ensure health check status has been recorded at least once
+        await client.GetAsync("/health/ready");
+
+        // Ensure API error has been recorded at least once (404 from unknown endpoint)
+        await client.GetAsync("/api/nonexistent");
+
+        var response = await client.GetAsync("/metrics");
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadAsStringAsync();
+
+        // Alert rules depend on these Prometheus metric names existing
+        body.Should().Contain("orderflow_health_check_status");
+        body.Should().Contain("orderflow_api_errors_total");
+        body.Should().Contain("http_server_request_duration_seconds");
+    }
 }

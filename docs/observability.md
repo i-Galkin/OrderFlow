@@ -41,7 +41,9 @@ containers.
   `category` as structured metadata.
 * **Health.** `/health*` responses also update `orderflow_health_check_status`. Checks are **not**
   run on a timer (a timer would open extra Kafka admin clients), so the gauge shows whatever the last
-  probe saw.
+  probe saw. In compose, the api healthcheck polls `/health/ready` (postgres, redis, kafka) every
+  10s purely to keep the gauges fresh; container health is still decided by `/health/live` alone.
+  Outside compose, something else must poll `/health/ready` on an interval or the gauge goes stale.
 * `/metrics` and `/health*` are excluded from `http.server.*` metrics so scrapes and probes do not
   count as API traffic.
 
@@ -166,7 +168,8 @@ the worker, check that `Observability__MetricsHost` binds all interfaces in the 
 ### ApiNotReady
 
 A readiness dependency is failing. The `check` label names it. Open `/health` for the description.
-The value only updates when a probe calls a health endpoint.
+The value only updates when a probe calls a health endpoint; in compose that's the api healthcheck
+polling `/health/ready` every 10s, so the gauge is fresh to within that interval.
 
 ### ApiHigh5xxRate
 
