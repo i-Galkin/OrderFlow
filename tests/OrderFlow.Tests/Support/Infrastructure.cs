@@ -42,11 +42,11 @@ public static class TestInfrastructure
         try
         {
             var options = ConfigurationOptions.Parse(RedisConfiguration);
-            options.AbortOnConnectFail = false;
-            options.ConnectTimeout = 2000;
+            options.AbortOnConnectFail = true;
+            options.ConnectTimeout = 3000;
 
             using var multiplexer = ConnectionMultiplexer.Connect(options);
-            return multiplexer.IsConnected;
+            return true;
         }
         catch
         {
