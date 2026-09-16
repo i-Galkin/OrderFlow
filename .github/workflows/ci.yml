@@ -1,10 +1,8 @@
 name: CI
 
+# Manual only: nothing runs on push or pull_request. Start it from the Actions tab or with
+# `gh workflow run CI --ref <branch>`.
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch: {}
 
 env:

@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Push the reviewed branch, wait for the GitHub Actions pipeline on its pull request, and merge it to master once CI is green and the code review is recorded as clean for that exact commit. Use after review-loop exits clean, or when asked to ship, land, or merge a reviewed branch.
+description: Push the reviewed branch, open its pull request, run the GitHub Actions pipeline on it manually, and merge it to master once CI is green and the code review is recorded as clean for that exact commit. Use after review-loop exits clean, or when asked to ship, land, or merge a reviewed branch.
 ---
 
 # Ship
@@ -11,14 +11,17 @@ read back from the PR instead of from the conversation.
 
 Read CLAUDE.md before starting.
 
-## Why a pull request is mandatory
+## CI is manual, and the PR is still mandatory
 
-`.github/workflows/ci.yml` triggers on `push` to `master` and on `pull_request` targeting `master`
-only. **Pushing a feature branch without an open PR runs no pipeline**, so "wait for CI" would wait
-forever or, worse, read an old run as green. Every ship goes through a PR.
+`.github/workflows/ci.yml` has **only a `workflow_dispatch` trigger**: no push, no pull request, no
+merge starts it. The user chose this, so never add a trigger back. This skill starts the run itself
+with `gh workflow run` (phase 2), which is the one sanctioned automated dispatch, and only on the
+branch being shipped. Waiting for a run nobody dispatched waits forever, and an older run for a
+different SHA is not evidence.
 
-The `pull_request` run builds GitHub's merge ref (branch merged into master as of the trigger), so a
-green run is evidence about the merged result, not just the branch.
+A dispatched run builds the **branch head**, not a merge ref. Gate 5 (`origin/master` is an ancestor
+of `HEAD`) is what makes that equal to the merged result, so it is not optional. Every ship still
+goes through a PR: the review marker lives on it and the merge happens through it.
 
 ## Parameters
 
@@ -30,7 +33,7 @@ green run is evidence about the merged result, not just the branch.
 
 ## Gate — all must hold to merge
 
-1. **CI green on the PR head SHA**: every job of the latest `CI` run for `headRefOid` concluded
+1. **CI green on the PR head SHA**: every job of the latest dispatched `CI` run for `headRefOid` concluded
    `success` (`build-and-test` and `observability-config`). Skipped or cancelled is not green.
 2. **Review clean for the same SHA**: a `review-loop:clean` marker comment (phase 1) exists on the
    PR whose `sha=` equals `headRefOid`. A marker for an older SHA does **not** count, see phase 3.
@@ -77,12 +80,14 @@ green run is evidence about the merged result, not just the branch.
    This comment is what survives `/resume` and what gate 2 checks. Write it only when review-loop
    actually exited clean in this conversation. **Never** write it from memory or to unblock a merge.
 
-## Phase 2 — wait for the pipeline
+## Phase 2 — run the pipeline
 
-1. Wait for the run to *exist* for this SHA. Right after a push, `gh pr checks` can report nothing
-   and read as "no failures". Poll:
-   `gh run list --workflow CI --commit <sha> --event pull_request --json databaseId,status,conclusion`
-   until a row appears (give up after ~2 minutes and check that the PR targets master).
+1. Dispatch it on the branch, then wait for the run to *exist* for this SHA (`gh run list` lags the
+   dispatch by a few seconds, and `gh pr checks` never shows dispatched runs):
+   `gh workflow run CI --ref <branch>`, then poll
+   `gh run list --workflow CI --commit <sha> --event workflow_dispatch --json databaseId,status,conclusion`
+   until a row appears (give up after ~2 minutes and report). Dispatch once per SHA: if a run for
+   this SHA already exists (e.g. after `/resume`), watch that one instead.
 2. Watch it **in the background**, because the Kafka service container health check alone can
    take minutes and the tool timeout is 10:
    `gh run watch <databaseId> --exit-status` with `run_in_background: true`. Do not poll with sleeps.
@@ -100,7 +105,7 @@ Classify:
 
 * **Infrastructure flake**: service container never became healthy, runner or network error,
   NuGet or image pull failure, with no test or compiler output implicated. Rerun once:
-  `gh run rerun <databaseId> --failed`, then back to phase 2 step 2. A second failure on the same
+  `gh run rerun <databaseId> --failed` (a rerun is not a new dispatch), then back to phase 2 step 2. A second failure on the same
   SHA is not a flake; treat it as a real failure.
 * **Real failure**: build error, failing test, `promtool`/Loki/Alloy/`jq` check. Common CI-only
   causes worth checking first: an integration test that **skipped locally** (no Postgres/Redis in
@@ -119,7 +124,8 @@ For a real failure, if the CI fix cap allows:
    rebuild containers and have `qa` re-check the affected flow. Zero Blocker/Major → post a fresh
    marker for the new SHA (same format, noting `ci-N`). A Blocker or Major here means the CI fix is
    entangled with the design; stop and hand back to `review-loop`.
-6. Back to phase 1 step 1 (push; the existing PR picks it up).
+6. Back to phase 1 step 1 (push; the existing PR picks it up), then phase 2 dispatches a run for
+   the new SHA.
 
 **On hitting the CI fix cap:** stop, do not merge. Report the failing jobs, the classified cause,
 what was tried per round, and the PR URL, and send `tracker` `event: blocked` with phase `ship`.
@@ -141,15 +147,14 @@ what was tried per round, and the PR URL, and send `tracker` `event: blocked` wi
 
 ## Phase 5 — post-merge
 
-1. The merge pushes to `master`, which triggers `CI` again (`push` event). Find it with
-   `gh run list --workflow CI --branch master --event push --limit 1` and watch it in the
-   background.
-2. If it fails, **do not revert automatically** and do not push to master. Report it to the user
-   with `--log-failed` output. Master is shared, and a revert is their decision.
-3. Locally: `git switch master && git pull --ff-only`. Leave the feature branch in place.
+1. No CI runs on `master` after the merge, and do not dispatch one: gate 5 means the merge commit's
+   tree is the tree the branch run already tested. If the user asks for a master run, dispatch it
+   with `gh workflow run CI --ref master` and report the result; if it fails, **do not revert
+   automatically** and do not push to master. Master is shared, and a revert is their decision.
+2. Locally: `git switch master && git pull --ff-only`. Leave the feature branch in place.
 
 ## Report
 
-To the user, briefly: PR URL, merged SHA, CI run URLs (PR run and master run with conclusions),
+To the user, briefly: PR URL, merged SHA, the CI run URL with its conclusion,
 number of CI fix rounds and flake reruns, and the `po` followups still open. If the skill stopped
 short of merging, say which gate failed and what evidence showed it.
