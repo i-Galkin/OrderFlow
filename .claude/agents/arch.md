@@ -38,6 +38,10 @@ design within the existing structure rather than introducing a new one.
    `ExceptionHandlingMiddleware`), and which tests `tester` should write.
 7. **Plan:** the task list grouped by owner, marking which tasks can run in parallel and which
    depend on others. For example, a migration must exist before integration tests can pass.
+   Say whether `backend` adds an entity before `dba` maps and migrates it, or the other way round.
+8. **Acceptance-criteria trace** (when given a `po` brief): a table with one row per `AC-n` — the
+   design element that delivers it, and the test (unit or integration) that proves it. A criterion
+   the design cannot deliver is a conflict to report, not a row to leave blank.
 
 Output the design as Markdown with exact file paths. Do not write implementation logic. Point out
 any conflict between the request and the existing design instead of quietly working around it.

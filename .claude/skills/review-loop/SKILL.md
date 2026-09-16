@@ -56,6 +56,10 @@ re-explaining. Do not respawn them each iteration.
 Give both, up front: the branch and its base, the scope rule above, the severity ladder, and the
 fixture SKU table. Neither should spend tokens rediscovering those.
 
+When the branch came from `implement-feature`, it carries `docs/features/<issue>-<slug>/`. Give
+`reviewer` the `design.md` path to review against, and give `qa` the `brief.md` acceptance criteria
+as a starting point for its scenarios (it still explores beyond them).
+
 Writers (`dba`, `backend`, `tester`) are spawned per iteration, only when there is work for them.
 
 ## The iteration
@@ -147,8 +151,9 @@ iterations.
 
 ## Phase G — business acceptance
 
-Only after a clean exit. Spawn `po` and give it the branch, its base, and the list of open GitHub
-issues. It judges as a user-client against the issue descriptions and returns a per-issue verdict
+Only after a clean exit. Spawn `po` (or reuse the one `implement-feature` kept alive) in acceptance
+mode and give it the branch, its base, the list of open GitHub issues, and the `brief.md` path if
+the branch has one — then the brief's acceptance criteria are its primary checklist. It judges as a user-client against the issue descriptions and returns a per-issue verdict
 plus **accept / accept-with-followups / reject**.
 
 Expect most of issues #1-#7 to come back "still reproduces" or "out of scope" — they are

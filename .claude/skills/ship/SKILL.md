@@ -57,7 +57,8 @@ green run is evidence about the merged result, not just the branch.
 2. Find or create the PR:
    `gh pr view --json number,url,headRefOid,baseRefName` →
    if none, `gh pr create --base master --fill`, then append the review-loop summary to the body.
-   The PR must target `master`.
+   The PR must target `master`. A PR opened by `implement-feature` already exists as a **draft**;
+   reuse it and leave it draft until phase 4.
 3. Confirm `headRefOid` equals `git rev-parse HEAD`. GitHub can lag the push by a few seconds, so
    re-read until it matches.
 4. Post the review record as a PR comment (skip if coming from standalone mode with an existing
@@ -129,10 +130,12 @@ what was tried per round, and the PR URL.
    `gh pr view <number> --json headRefOid,mergeable,reviewDecision,state,comments` and
    `git fetch origin && git merge-base --is-ancestor origin/master HEAD`. Re-check all five gates
    against the fresh values.
-2. Merge, pinned to the SHA that was verified, so a push that lands mid-merge is refused rather
+2. If the PR is a draft (`isDraft` in `gh pr view --json isDraft`), mark it ready now, after all
+   gates hold: `gh pr ready <number>`. A draft cannot be merged.
+3. Merge, pinned to the SHA that was verified, so a push that lands mid-merge is refused rather
    than merged unreviewed:
    `gh pr merge <number> --merge --match-head-commit <sha>`
-3. Confirm: `gh pr view <number> --json state,mergeCommit` shows `MERGED`.
+4. Confirm: `gh pr view <number> --json state,mergeCommit` shows `MERGED`.
 
 ## Phase 5 — post-merge
 

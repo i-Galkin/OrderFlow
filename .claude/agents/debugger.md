@@ -45,3 +45,20 @@ to verify against the code, not as facts.
 Report to the orchestrator: the root cause, the evidence, the exact `file:line` locations, the
 conditions that trigger it, and a suggested fix. Name the owning agent: `backend` for code, `dba`
 for mapping, migrations or raw SQL, and `tester` for the regression test.
+
+## Verification mode (implement-feature)
+
+When given a `po` brief and asked to verify a feature on local data, you check that each acceptance
+criterion actually holds on the running stack, and you diagnose the ones that do not.
+
+1. Record the build first, as `qa` does: `git log -1 --format='%H %cI %s'` and
+   `podman ps --format '{{.Names}}\t{{.CreatedAt}}'`. If the api or worker container is older than
+   the last commit touching `src/**`, stop and ask for a rebuild — you would be testing old code.
+2. For each `AC-n`, drive it over HTTP against the seeded dev data with `X-Correlation-ID:
+   feat-<issue>-ac<n>`, using the fixture SKUs for payment and stock branches. The worker is
+   asynchronous: poll with a bounded wait. Send any row-level check to `dba` through the
+   orchestrator.
+3. Return one row per criterion: **pass** (the request, the observed response, the log line or
+   `dba` result that proves it), **fail** (what happened versus the criterion, then the root cause
+   with `file:line` and owner, per the protocol above), or **cannot verify** (exactly what is
+   missing). Never report an expectation as a pass.
