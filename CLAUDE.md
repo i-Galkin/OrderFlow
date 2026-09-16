@@ -35,16 +35,22 @@ The API only applies migrations at startup when `OrderFlow__ApplyMigrationsOnSta
 Packages use lock files (`RestorePackagesWithLockFile` in `Directory.Build.props`), so adding or
 bumping a package must update the relevant `packages.lock.json`; CI caches restores on those files.
 
+Configuration lives in each app's `appsettings.json` (`ConnectionStrings:Postgres`, `Redis:*`,
+`Kafka:*`, `Observability:*`) and can be overridden with `__` environment variables.
+
 ## Testing notes
 
+* One project, `tests/OrderFlow.Tests`, split into `Unit/`, `Integration/` and `Support/`. xUnit +
+  FluentAssertions, no mocking library (hand-written doubles in `Support/Fakes.cs`), test names are
+  sentences (`Two_writers_confirming_the_same_order_cannot_both_win`).
 * Integration and concurrency tests need Postgres **and** Redis. Without them they silently
   **skip** (`PostgresFactAttribute` / `PostgresTheoryAttribute` / `PostgresRedisFactAttribute` in
   `tests/OrderFlow.Tests/Support/Infrastructure.cs`), so a green `dotnet test` on a machine with no
   docker running proves much less than it looks. Start `docker compose up -d postgres redis` before
   trusting a run. CI (`.github/workflows/ci.yml`) runs them against real service containers.
-* `PostgresFixture` creates and migrates the `orderflow_test` database once per run. Override the
-  targets with `ORDERFLOW_TEST_POSTGRES` / `ORDERFLOW_TEST_REDIS` (CI also sets
-  `ORDERFLOW_TEST_KAFKA`, which no test reads).
+* `PostgresFixture` (shared through `[Collection(PostgresCollection.Name)]`) creates and migrates the
+  `orderflow_test` database once per run. Override the targets with `ORDERFLOW_TEST_POSTGRES` /
+  `ORDERFLOW_TEST_REDIS` (CI also sets `ORDERFLOW_TEST_KAFKA`, which no test reads).
 * `OrderFlowApiFactory` boots the real API in the `Testing` environment against that database but
   swaps `IOrderEventPublisher` for `RecordingEventPublisher` and `IProductCache` for
   `InMemoryProductCache`, so HTTP tests need no broker and never touch the Redis cache path. It
@@ -55,65 +61,73 @@ bumping a package must update the relevant `packages.lock.json`; CI caches resto
 
 Two deployables over one Postgres database, sharing all domain code:
 
-* **OrderFlow.Api** owns the synchronous side: validation, writing the order, and the
-  `Pending -> Confirmed` and `Pending/Confirmed -> Cancelled` transitions.
+* **OrderFlow.Api** owns the synchronous side: validation, writing orders and products, and the
+  confirm, cancel and retry operations.
 * **OrderFlow.Worker** owns everything after confirmation: stock reservation, payment, and the
-  `Confirmed/Failed -> Processing -> Completed/Failed` transitions.
+  `Processing -> Completed/Failed` transitions.
 * **OrderFlow.Infrastructure** holds the domain model, EF Core, Redis, Kafka and the processing
-  services. **OrderFlow.Contracts** holds DTOs plus the event envelope. Controllers never expose EF
-  entities; `OrderMapping` (orders and products) is the only entity→DTO path.
+  services. **OrderFlow.Contracts** holds DTOs (`sealed record`) plus the event envelope. Controllers
+  never expose EF entities; `OrderMapping` (orders and products) is the only entity→DTO path.
 
-`docs/architecture.md` has the diagrams; `docs/issues/` and `docs/incidents/` carry the open reports
-and past write-ups. **`docs/architecture.md` and the README describe the intended design; several
-open issues exist precisely because the code diverges from it.** Where this file and the code
-disagree below, the divergence is called out — check the code, not the docs, before relying on a
-guarantee.
+`docs/architecture.md` has the diagrams, domain, index and worker pipeline descriptions;
+`docs/incidents/` has past incident write-ups.
 
-### State machine
+Code conventions: `[ApiController]` controllers (not minimal APIs) inject the concrete `OrderService`
+/ `ProductService` registered in `ServiceRegistration`. There is no repository layer and services
+have no interfaces; only infrastructure seams are abstracted (`IOrderEventPublisher`,
+`IProductCache`, `IInventoryService`, `IPaymentService`). File-scoped namespaces, implicit usings,
+nullable enabled, `CancellationToken` on every async call. Each area registers itself through an
+`Add*` extension (`PersistenceRegistration`, `CachingRegistration`, `MessagingRegistration`, ...).
 
-`OrderStatusTransitions` is the single source of truth, and `Order.Confirm/Cancel/StartProcessing/
-Complete/Fail` are the intended way to change `Status` — each one validates the transition,
-touches `UpdatedAt` and increments `Version`. New status logic belongs there, not in a service.
-The table itself only allows `Pending -> Cancelled`; `OrderService.CancelAsync` handles
-`Confirmed -> Cancelled` by assigning `Status` directly (bypassing validation and `Version`).
+### HTTP surface
+
+* `POST /api/orders`, `GET /api/orders/{id}`, `GET /api/orders?page=&pageSize=&status=` (paged,
+  `pageSize` max 200), `POST /api/orders/{id}/confirm | cancel | retry`
+* `GET /api/products/{id}`, `POST /api/products`
+* `GET /health` (all checks), `/health/live` (checks tagged `live`), `/health/ready` (postgres,
+  redis, kafka). Checks are registered in `Infrastructure/Health/HealthRegistration`.
+* Every endpoint accepts and echoes `X-Correlation-ID`.
+
+### Domain and state machine
+
+Entities (`Infrastructure/Domain`): `Customer`, `Product` (unique `Sku`, `StockQuantity`, `Version`),
+`Order` (`Status`, `TotalAmount`, `FailureReason`, `Version`), `OrderItem`, `ProcessedEvent`,
+`InventoryReservation` (one row per order line).
+
+Statuses: `Pending`, `Confirmed`, `Processing`, `Completed`, `Failed`, `Cancelled`.
+`OrderStatusTransitions` is the single source of truth for which transitions are legal, and
+`Order.Confirm/Cancel/StartProcessing/Complete/Fail` are the way to change `Status`: each one
+validates the transition, touches `UpdatedAt` and increments `Version`. New status logic belongs
+there, not in a service.
 
 ### Events
 
-One topic (`orders.events`), one envelope (`Contracts/Events/OrderEvent`), keyed by order id so a
-given order's events stay ordered on one partition. `EventType` is a string constant from
-`OrderEventTypes`; `OrderEventProcessor` switches on it and only acts on `OrderConfirmed` and
-`OrderCancelled`. The producer is fire-and-forget (`Produce` with a delivery callback that only
-logs), so a publish call returning does not mean the broker has the message.
+One topic (`orders.events`, dead letters on `orders.failed`, names in `KafkaTopics`), one envelope
+(`Contracts/Events/OrderEvent`), keyed by order id so a given order's events stay ordered on one
+partition. `EventType` is a string constant from `OrderEventTypes` (`OrderCreated`, `OrderConfirmed`,
+`OrderCancelled` from the API; `OrderProcessingStarted`, `OrderCompleted`, `OrderFailed` from the
+worker). `OrderEventProcessor` switches on it and acts on `OrderConfirmed` and `OrderCancelled`. The
+producer is fire-and-forget (`Produce` with a delivery callback), so a publish call returning does
+not mean the broker has the message.
 
-Retry handling lives in `Worker/OrderEventConsumer`, not the processor:
-
-* `DomainException` (including `NotFoundException` and `InsufficientStockException`) → straight to
-  `orders.failed`.
-* **Any other exception** (not only `TransientProcessingException`) → `Task.Delay` backoff inside the
-  consume loop, then re-publish as a new event id with an incremented `Attempt`. The attempt count
-  comes from an in-memory per-order dictionary, not from the incoming envelope, so it resets on
-  restart. Past `Kafka:MaxRetryAttempts` the event goes to `orders.failed`.
-* On `Attempt > 0`, if a reservation already exists the processor skips reservation and payment and
-  completes the order directly.
-
-The consumer resolves a single DI scope (one `OrderFlowDbContext`) for its whole lifetime and also
-keeps an in-memory `_handledEvents` set.
+`Worker/OrderEventConsumer` runs the consume loop and owns retry handling: `DomainException`s
+(including `NotFoundException` and `InsufficientStockException`) are permanent and go to
+`orders.failed`; other failures are retried by re-publishing the event with an incremented `Attempt`
+after a backoff from `Kafka:RetryBaseDelaySeconds`, up to `Kafka:MaxRetryAttempts`.
 
 ### Idempotency
 
-Kafka delivery is at-least-once. `OrderEventProcessor` checks `processed_events` (PK = event id)
-before handling and inserts the row in a separate `SaveChanges` after handling — not atomically
-with the handler's own writes. `POST /api/orders/{id}/retry` intentionally publishes a *new*
-`OrderConfirmed` event id (with `Attempt = 1`) so an operator-requested retry is not deduplicated
-away.
+Kafka delivery is at-least-once. `OrderEventProcessor` skips events whose id is already in
+`processed_events` (PK = event id) and records each event it handles there.
+`POST /api/orders/{id}/retry` intentionally publishes a *new* `OrderConfirmed` event id (with
+`Attempt = 1`) so an operator-requested retry is not deduplicated away.
 
-### Concurrency
+### Concurrency and errors
 
 `Order.Version` and `Product.Version` are EF concurrency tokens incremented in the domain methods;
-a losing writer gets `DbUpdateConcurrencyException`, which `ExceptionHandlingMiddleware` maps to
-409. That middleware also maps `NotFoundException` → 404, `InvalidStatusTransitionException` and
-`InsufficientStockException` → 409, other `DomainException` → 400. `FakeInventoryService` does not
-go through the tokens: it checks stock on an untracked read and then decrements with raw SQL.
+a losing writer gets `DbUpdateConcurrencyException`. `ExceptionHandlingMiddleware` maps that to 409,
+`NotFoundException` → 404, `InvalidStatusTransitionException` and `InsufficientStockException` →
+409, other `DomainException` → 400.
 
 ### Persistence naming
 
@@ -123,11 +137,9 @@ Tables are snake_case (`orders`, `order_items`, `processed_events`, `inventory_r
 
 ### Caching
 
-`GET /api/products/{id}` is cache-aside over Redis behind `IProductCache`
-(`RedisProductCache.CacheKey` → `product:{id:N}`), TTL from `Redis:ProductTtlSeconds`. Only
-`RedisConnectionException` on read falls through to Postgres; `SetAsync` is unguarded. Always build
-keys via `RedisProductCache.CacheKey` — `FakeInventoryService` hand-formats `product:{id}` (dashed
-GUID) when invalidating, which does not match.
+`GET /api/products/{id}` is cache-aside over Redis behind `IProductCache` (`RedisProductCache`),
+TTL from `Redis:ProductTtlSeconds` (600 s by default). Always build keys via
+`RedisProductCache.CacheKey` (`product:{id:N}`); code that changes a product must drop its key.
 
 ### Correlation ids
 
@@ -135,16 +147,16 @@ GUID) when invalidating, which does not match.
 `X-Correlation-ID` header (or mints one) and echoes it back; `KafkaOrderEventPublisher` copies it
 into the payload and a `correlation-id` message header (`CorrelationContext.KafkaHeaderName`); the
 worker opens a correlation + logging scope per message. Anything that logs inside a request or a
-message handler picks it up automatically — do not thread it through signatures. Use the
-`CorrelationContext` constants for header names: the consumer currently reads a hard-coded
-`correlationId`, which does not match the producer.
+message handler picks it up automatically, so do not thread it through signatures. Use the
+`CorrelationContext` constants for header names.
 
 ### Observability
 
 OpenTelemetry metrics are exported in Prometheus format (API: `/metrics` on :8080; worker: an
-HttpListener on :9464). Logs reach Loki through Grafana Alloy tailing container stdout, so logging
-code stays as it is. Config, dashboards and alert rules live under `observability/`;
-`docs/observability.md` has the metric catalogue and runbooks.
+HttpListener on :9464). Both apps log JSON to stdout; logs reach Loki through Grafana Alloy tailing
+container stdout, so logging code stays as it is. Config, dashboards and alert rules live under
+`observability/` (Prometheus :9090, Grafana :3000 `admin`/`admin`, Loki :3100, Alloy :12345);
+`docs/observability.md` has the metric catalogue, log queries and alert runbooks.
 
 * Custom instruments belong in the static `Infrastructure/Observability/OrderFlowMetrics` (same
   pattern as `CorrelationContext`), so instrumented services keep their constructors. Record only,
@@ -154,11 +166,10 @@ code stays as it is. Config, dashboards and alert rules live under `observabilit
   gain `_total`, units add a suffix (`orderflow.worker.last_poll` with unit `s` →
   `orderflow_worker_last_poll_seconds`). Renaming an instrument breaks them.
 * The dashboard JSON under `observability/grafana/dashboards/` is provisioned read-only; edit it in
-  the repo.
-* Consumer lag comes from `Worker/KafkaLagMonitor` (a separate admin client, cluster-wide
-  metadata only, so it never triggers topic auto-creation). Health gauges update only when
-  `/health*` is polled; do not add an `IHealthCheckPublisher`, which would run the Kafka check on a
-  timer.
+  the repo. CI validates `observability/prometheus/alerts.yml` with `promtool`.
+* Consumer lag comes from `Worker/KafkaLagMonitor` (a separate admin client that only reads
+  offsets). Health gauges update only when `/health*` is polled; do not add an
+  `IHealthCheckPublisher`, which would run the Kafka check on a timer.
 * The HttpListener exporter rejects `*`/`+` as `Host`; `Worker/Program.cs` works around it with
   `ConfigureHttpListener`. `/metrics` and `/health*` call `DisableHttpMetrics()`.
 
@@ -166,7 +177,24 @@ code stays as it is. Config, dashboards and alert rules live under `observabilit
 
 `FakePaymentService` decides from the order total: amounts ending `.13` are permanently declined,
 `.77` time out transiently, over 10,000 goes to manual review (transient), everything else is
-authorised. `SeedDataGenerator` derives every id from an MD5 of `orderflow:kind:index`, so seeded
-data is identical on every machine, and exposes fixture SKUs (`SKU-DECLINE-13`, `SKU-TIMEOUT-77`,
+authorised. `FakeInventoryService` checks and decrements stock and writes `inventory_reservations`.
+`SeedDataGenerator` derives every id from an MD5 of `orderflow:kind:index`, so seeded data is
+identical on every machine, and exposes fixture SKUs (`SKU-DECLINE-13`, `SKU-TIMEOUT-77`,
 `SKU-SCARCE-01` with 5 units, `SKU-HIGHVALUE-01`) that hit those branches. Keep both
-deterministic — tests and the docs rely on it.
+deterministic, since the tests rely on it.
+
+## Subagents and ownership
+
+`.claude/agents/` defines the team. Writers own separate files so they can run in parallel:
+
+| Agent | Writes | Database |
+| --- | --- | --- |
+| `arch` | nothing (designs, splits work by owner) | none |
+| `backend` | `src/**` except `Infrastructure/Persistence/**`; `observability/**` | none; ORM code only, no raw SQL |
+| `dba` | `Infrastructure/Persistence/**` (mapping, migrations), raw SQL | **only agent with real DB access** |
+| `tester` | `tests/**` | fixture-managed test database only |
+| `debugger` | nothing (diagnoses) | none; asks `dba` for data |
+| `reviewer` | nothing (reviews diffs) | none |
+
+When writers run at the same time, give each its own git worktree (concurrent `dotnet build` in one
+checkout locks `bin/obj`) and its own test database via `ORDERFLOW_TEST_POSTGRES`.

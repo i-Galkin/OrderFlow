@@ -17,8 +17,8 @@ client -> OrderFlow.Api -> Postgres
 | `src/OrderFlow.Infrastructure` | Domain model, EF Core, Redis, Kafka, processing services |
 | `tests/OrderFlow.Tests` | Unit, integration and concurrency tests |
 
-See [docs/architecture.md](docs/architecture.md) for the full picture, [docs/issues](docs/issues)
-for the current backlog and [docs/incidents](docs/incidents) for past incident write-ups.
+See [docs/architecture.md](docs/architecture.md) for the full picture and
+[docs/incidents](docs/incidents) for past incident write-ups.
 
 ## Requirements
 

@@ -227,17 +227,6 @@ Product reads are falling back to Postgres because Redis connections fail. Laten
 librdkafka is reporting errors, usually broker connectivity. The `client` label tells you whether
 it is the producer, consumer or lag monitor.
 
-## Open issues these signals expose
-
-The instrumentation reports behaviour and changes none of it.
-
-| Issue | Signal |
-| --- | --- |
-| [002](issues/002-kafka-processing-delay.md) queue stalls after `gateway_timeout` | `orderflow_worker_last_poll_seconds` stops advancing and backoff time rises; lag climbs on every partition at once |
-| [004](issues/004-retry-marks-declined-orders-complete.md) retries completing declined orders | `orderflow_processing_resumed_with_reservation_total` rises next to `orderflow_orders_manual_retries_total`, while no matching `orderflow_payments_total{outcome="Success"}` is recorded |
-| [005](issues/005-correlation-id-missing-in-worker-logs.md) correlation id lost in the worker | `orderflow_worker_correlation_id_generated_total` counts every message; a Logs search by correlation id returns only API lines |
-| [007](issues/007-readiness-flapping-after-deploy.md) readiness after a clean deploy | `orderflow_health_check_status{check="kafka"}` stays 0 until the topic exists |
-
 ## Production notes
 
 * `/metrics` is served on the API's public port. Behind an ingress, block it from outside or move it
