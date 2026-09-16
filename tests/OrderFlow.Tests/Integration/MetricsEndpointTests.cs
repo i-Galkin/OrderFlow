@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OrderFlow.Contracts.Dtos;
+using OrderFlow.Infrastructure.Observability;
 using OrderFlow.Tests.Support;
 using Xunit;
 
@@ -56,19 +58,24 @@ public class MetricsEndpointTests : IDisposable
     {
         var client = _factory.CreateClient();
 
-        // Ensure health check status has been recorded at least once
-        await client.GetAsync("/health/ready");
+        // Set the gauge directly rather than via /health/ready: the test host has no Redis override,
+        // so the checks may not run here, and this test is about the exported name, not the checks.
+        var check = $"test-{Guid.NewGuid():N}";
+        OrderFlowMetrics.SetHealthCheckStatus(check, HealthStatus.Healthy);
 
-        // Ensure API error has been recorded at least once (404 from unknown endpoint)
-        await client.GetAsync("/api/nonexistent");
+        // Confirming an unknown order throws NotFoundException, which the exception middleware
+        // counts. An unmatched route would 404 without ever reaching it.
+        (await client.PostAsync($"/api/orders/{Guid.NewGuid()}/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         var response = await client.GetAsync("/metrics");
         response.EnsureSuccessStatusCode();
-        var body = await response.Content.ReadAsStringAsync();
+        var lines = (await response.Content.ReadAsStringAsync()).Split('\n');
 
-        // Alert rules depend on these Prometheus metric names existing
-        body.Should().Contain("orderflow_health_check_status");
-        body.Should().Contain("orderflow_api_errors_total");
-        body.Should().Contain("http_server_request_duration_seconds");
+        // Assert labelled samples, not just the HELP/TYPE lines an instrument with no points emits.
+        lines.Should().Contain(l => l.StartsWith("orderflow_health_check_status{") && l.Contains($"check=\"{check}\""));
+        lines.Should().Contain(l => l.StartsWith("orderflow_api_errors_total{")
+            && l.Contains("status_code=\"404\"") && l.Contains("type=\"NotFoundException\""));
+        lines.Should().Contain(l => l.StartsWith("http_server_request_duration_seconds_count{"));
     }
 }

@@ -79,7 +79,9 @@ public class OrderFlowMetricsTests
 
         OrderFlowMetrics.RecordApiError(errorType, statusCode);
 
-        collector.Measurements.Should().ContainSingle().Which.Should().Match<Measurement>(m =>
+        // Integration tests record API errors through the middleware in parallel, so look for our
+        // measurement rather than asserting on a total.
+        collector.Measurements.Should().Contain(m =>
             m.Value == 1 && Equals(m.Tags["type"], errorType) && Equals(m.Tags["status_code"], statusCode));
     }
 
