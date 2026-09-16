@@ -20,6 +20,24 @@ client -> OrderFlow.Api -> Postgres
 See [docs/architecture.md](docs/architecture.md) for the full picture and
 [docs/incidents](docs/incidents) for past incident write-ups.
 
+## Working with Claude Code
+
+`CLAUDE.md` holds the repository guidance, and `.claude/agents/` defines six subagents that own
+separate parts of the tree so they can work in parallel:
+
+| Agent | Writes | Database access |
+| --- | --- | --- |
+| `arch` | nothing; designs the change and splits it by owner | none |
+| `backend` | `src/**` except `Infrastructure/Persistence/**`, and `observability/**` | none: EF Core code only, no raw SQL |
+| `dba` | `Infrastructure/Persistence/**` (mapping, migrations) and raw SQL | the only agent that connects to a real database |
+| `tester` | `tests/**` | the test database created by `PostgresFixture` |
+| `debugger` | nothing; diagnoses and hands the fix to an owner | none; asks `dba` for data |
+| `reviewer` | nothing; reviews the diff | none |
+
+Running several writing agents at once needs a git worktree each, because a concurrent
+`dotnet build` in one checkout locks `bin/obj`, plus a separate test database per worktree via
+`ORDERFLOW_TEST_POSTGRES`.
+
 ## Requirements
 
 * .NET 10 SDK
