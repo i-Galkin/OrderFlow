@@ -149,6 +149,9 @@ Stop. **Do not run `po`.** Leave the tree committed and report:
 Hitting the cap means the change needs a design decision, which is `arch`'s job — not more
 iterations.
 
+If the branch targets an issue, send `tracker` `event: blocked` with phase `review-loop`, the
+iteration reached and the unresolved Blocker/Major summary in business terms.
+
 ## Phase G — business acceptance
 
 Only after a clean exit. Spawn `po` (or reuse the one `implement-feature` kept alive) in acceptance
@@ -162,6 +165,12 @@ alone. That is correct output, not a problem to fix.
 
 A **reject** feeds a new iteration, if the cap allows. Report the verdict to the user verbatim in
 business terms; do not translate it back into engineering language.
+
+**Issue tracking.** If the branch targets an issue, send `tracker` (reuse the one `implement-feature`
+kept alive, or spawn it with a `name`) `event: accepted` with the verdict, then
+`event: followups` with the `po` followups and any Minor findings the user wants kept, each as
+title, type, severity and impact. Followups that belong to a long-standing issue (#1-#10) go to that
+issue as a comment, not a new one — say which in the event. Keep `tracker` alive into `ship`.
 
 ## Phase H — commit, push, ship
 

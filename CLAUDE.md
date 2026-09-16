@@ -197,6 +197,7 @@ deterministic, since the tests rely on it.
 | `reviewer` | nothing (reviews diffs) | none |
 | `qa` | nothing (exercises the running stack over HTTP) | none; asks `dba` for data |
 | `po` | nothing (feature briefs and business acceptance against the GitHub issues) | none |
+| `tracker` | GitHub only: issues, labels, milestones, project board (never the repo) | none |
 
 When writers run at the same time, give each its own git worktree (concurrent `dotnet build` in one
 checkout locks `bin/obj`) and its own test database via `ORDERFLOW_TEST_POSTGRES`.
@@ -205,7 +206,9 @@ checkout locks `bin/obj`) and its own test database via `ORDERFLOW_TEST_POSTGRES
 with acceptance criteria, `arch` designs against it (user checkpoint), `dba` and `backend` implement
 with the lead routing requests between them, `tester` covers every criterion, `debugger` verifies
 them on the rebuilt stack with seeded data, and the lead opens the PR and hands off to review-loop.
-The brief and design are committed under `docs/features/<issue>-<slug>/`.
+The brief and design are committed under `docs/features/<issue>-<slug>/`. The lead sends `tracker`
+an event at each state change (started, brief, PR opened, blocked, followups, merged) so the issue
+and the "OrderFlow Bugs & Incidents" board stay current; nobody else edits issues.
 
 `.claude/skills/review-loop/` drives the whole team as one automated cycle: review and manual test
 in parallel, then sequential fixes, a build-and-rebuild gate, and a business acceptance pass. The

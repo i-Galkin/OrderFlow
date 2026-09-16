@@ -122,7 +122,7 @@ For a real failure, if the CI fix cap allows:
 6. Back to phase 1 step 1 (push; the existing PR picks it up).
 
 **On hitting the CI fix cap:** stop, do not merge. Report the failing jobs, the classified cause,
-what was tried per round, and the PR URL.
+what was tried per round, and the PR URL, and send `tracker` `event: blocked` with phase `ship`.
 
 ## Phase 4 — merge
 
@@ -136,6 +136,8 @@ what was tried per round, and the PR URL.
    than merged unreviewed:
    `gh pr merge <number> --merge --match-head-commit <sha>`
 4. Confirm: `gh pr view <number> --json state,mergeCommit` shows `MERGED`.
+5. For each issue the PR closes, send `tracker` (reuse or spawn with a `name`) `event: merged`
+   with the issue, PR and merge SHA. It confirms the issue closed and moves the board to Done.
 
 ## Phase 5 — post-merge
 

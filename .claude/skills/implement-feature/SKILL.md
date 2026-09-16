@@ -35,6 +35,25 @@ from the database, the agent stops and reports the exact request; **you** send i
 send the answer back. Spawn every agent **with a `name`** and continue it with `SendMessage`, so
 `backend` resumes with its context instead of re-reading the whole design.
 
+## Keeping the issue current (`tracker`)
+
+`tracker` owns every write to the issue, its labels, milestone and the project board. The lead never
+edits issues directly. Spawn it once **with a `name`** at phase 0 and send it one event per state
+change with `SendMessage` (`event: <name>` plus the fields listed in `tracker.md`). It runs in the
+background: do not wait on it before starting the next phase, but read its report when it lands and
+surface any `needs approval` or `errors` line to the user. A tracker failure never blocks delivery.
+
+| When | Event |
+| --- | --- |
+| phase 0 step 2, branch created | `started` |
+| phase 1, brief written | `brief` (with the AC list) |
+| phase 2, user approved the design | `design-approved` |
+| phase 6, debugger results in | `verified` |
+| phase 7, PR opened | `pr-opened` |
+| any stop | `blocked` if the user is expected to unblock it soon, else `stopped` |
+
+Keep `tracker` alive into review-loop and ship.
+
 ## Phase 0 — preflight
 
 1. `git status` must be clean.
@@ -44,6 +63,7 @@ send the answer back. Spawn every agent **with a `name`** and continue it with `
 4. `podman ps` — postgres, redis, kafka, api, worker healthy. Integration tests and phase 6 need
    them; without them tests silently skip.
 5. No host API process holding `bin/obj`: `Get-Process OrderFlow.Api -ErrorAction SilentlyContinue`.
+6. Spawn `tracker` and send `event: started` with the issue and branch.
 
 ## Phase 1 — business brief (`po`)
 
@@ -54,6 +74,7 @@ problem and who has it, the behaviour after the change, numbered acceptance crit
 * Open questions that change behaviour → ask the user (AskUserQuestion) before going on, and send
   the answers back to `po` to fold into the brief.
 * Write the final brief verbatim to `docs/features/<issue>-<slug>/brief.md`.
+* `tracker`: `event: brief` with the path and the `AC-n` titles.
 
 Keep `po` alive; it runs the acceptance gate at the end of review-loop.
 
@@ -127,6 +148,8 @@ and report the failing criteria with their diagnoses.
 
 **Cannot verify** does not block the PR but goes into its description, so reviewers see the gap.
 
+`tracker`: `event: verified` with the per-criterion results.
+
 ## Phase 7 — pull request (lead)
 
 The lead opens it: it is outward-facing, no agent owns git, and `ship` expects to find the PR
@@ -144,15 +167,18 @@ the lead created.
 
 It stays **draft** until `ship` has a clean review and green CI. CI still runs on draft PRs.
 
+3. `tracker`: `event: pr-opened` with the PR number.
+
 ## Phase 8 — hand off to review-loop
 
 Invoke **`review-loop`**. Tell it: the branch and base `master`, the PR number, the design path
 (for `reviewer`) and the brief path (for `po`'s acceptance gate — judge against the brief's
-acceptance criteria, not only the issue text). Pass the still-alive `po` along. review-loop and
+acceptance criteria, not only the issue text). Pass the still-alive `po` and `tracker` along. review-loop and
 then `ship` take it from there; `ship` marks the PR ready right before merging.
 
 ## Stop and report
 
 Stop without opening a PR when: the user rejects the design, a round-trip or fix cap is hit, or
-the build/tests cannot be made green. Leave the branch committed and report the phase reached, the
-open questions or failing criteria with owners, and a recommendation.
+the build/tests cannot be made green. Leave the branch committed, send `tracker` `event: blocked`
+or `event: stopped` with the phase and reason, and report the phase reached, the open questions or
+failing criteria with owners, and a recommendation.
