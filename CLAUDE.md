@@ -205,3 +205,8 @@ checkout locks `bin/obj`) and its own test database via `ORDERFLOW_TEST_POSTGRES
 in parallel, then sequential fixes, a build-and-rebuild gate, and a business acceptance pass. The
 rebuild step is load-bearing — `qa` tests the container image on `:8080`, so a fix in `src/**` is
 invisible to it until `podman compose up -d --build api worker` runs.
+
+After a clean loop and a `po` accept, review-loop hands off to `.claude/skills/ship/`: push, PR
+against `master` (CI only runs on PRs to master and pushes to master, so a bare branch push runs
+nothing), a `review-loop:clean sha=` marker comment on the PR, wait for CI on that SHA, fix and
+re-review the delta if it fails, then `gh pr merge --merge --match-head-commit`.

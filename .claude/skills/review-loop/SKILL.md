@@ -43,7 +43,8 @@ Do all of this before spawning anything.
    (PowerShell: `Get-Process OrderFlow.Api -ErrorAction SilentlyContinue`). The containerised API
    does not lock host files; a host one does.
 5. Check the permission allowlist in `.claude/settings.local.json` covers `podman`, `curl`,
-   `dotnet build`, `dotnet test` and read-only `git`. Teammates inherit the lead's permission mode
+   `dotnet build`, `dotnet test`, read-only `git` and the read-only `gh pr`/`gh run` calls `ship`
+   uses. Teammates inherit the lead's permission mode
    **at spawn**, so a gap here means the loop stalls on prompts later.
 
 ## Phase 0b — spawn
@@ -156,3 +157,18 @@ alone. That is correct output, not a problem to fix.
 
 A **reject** feeds a new iteration, if the cap allows. Report the verdict to the user verbatim in
 business terms; do not translate it back into engineering language.
+
+## Phase H — commit, push, ship
+
+Only after a clean exit **and** a `po` verdict of `accept` or `accept-with-followups`. After a
+reject or a cap hit, stop at the report; nothing is pushed.
+
+1. `git status`. Phase F already committed every iteration, so the tree should be clean. If
+   anything from the loop is still uncommitted, commit it as `chore: <summary>`.
+2. Invoke the **`ship`** skill. It pushes, opens or reuses the PR against `master`, records this
+   loop's clean result on the PR, waits for CI, and merges when CI is green on the reviewed SHA.
+   Hand it the numbers it needs for the review record: iterations run, reviewer/qa Minor counts,
+   the final `dotnet test` passed/failed/skipped, the `po` verdict and its followups.
+
+Keep `reviewer` and `qa` alive into `ship`. If CI fails and a fix lands, `ship` has them review
+only the delta, and their memory of this loop is what keeps that cheap.
