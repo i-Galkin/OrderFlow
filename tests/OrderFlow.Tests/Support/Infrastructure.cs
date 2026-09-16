@@ -12,7 +12,7 @@ public static class TestInfrastructure
 {
     public static string PostgresConnectionString =>
         Environment.GetEnvironmentVariable("ORDERFLOW_TEST_POSTGRES")
-        ?? "Host=localhost;Port=5432;Database=orderflow_test;Username=orderflow;Password=orderflow;Timeout=3";
+        ?? "Host=localhost;Port=5432;Database=orderflow_test;Username=postgres;Password=postgres;Timeout=3";
 
     public static string RedisConfiguration =>
         Environment.GetEnvironmentVariable("ORDERFLOW_TEST_REDIS") ?? "localhost:6379";
@@ -42,11 +42,11 @@ public static class TestInfrastructure
         try
         {
             var options = ConfigurationOptions.Parse(RedisConfiguration);
-            options.AbortOnConnectFail = false;
-            options.ConnectTimeout = 2000;
+            options.AbortOnConnectFail = true;
+            options.ConnectTimeout = 3000;
 
             using var multiplexer = ConnectionMultiplexer.Connect(options);
-            return multiplexer.IsConnected;
+            return true;
         }
         catch
         {

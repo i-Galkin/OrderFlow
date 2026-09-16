@@ -12,7 +12,7 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Ord
     public OrderFlowDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("ORDERFLOW_CONNECTION")
-                               ?? "Host=localhost;Port=5432;Database=orderflow;Username=orderflow;Password=orderflow";
+                               ?? "Host=localhost;Port=5432;Database=orderflow;Username=postgres;Password=postgres";
 
         var options = new DbContextOptionsBuilder<OrderFlowDbContext>()
             .UseNpgsql(connectionString)

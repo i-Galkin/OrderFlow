@@ -5,9 +5,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using OpenTelemetry.Metrics;
 using OrderFlow.Infrastructure.Caching;
 using OrderFlow.Infrastructure.Health;
 using OrderFlow.Infrastructure.Messaging;
+using OrderFlow.Infrastructure.Observability;
 using OrderFlow.Infrastructure.Persistence;
 using OrderFlow.Infrastructure.Seeding;
 using OrderFlow.Infrastructure.Services;
@@ -38,6 +40,16 @@ builder.Services.AddOrderFlowMessaging(builder.Configuration);
 builder.Services.AddOrderFlowCaching(builder.Configuration);
 builder.Services.AddOrderFlowServices();
 builder.Services.AddOrderFlowHealthChecks();
+builder.Services.AddOrderFlowObservability(
+    builder.Configuration,
+    "orderflow-api",
+    builder.Environment.EnvironmentName,
+    metrics => metrics
+        .AddMeter("Microsoft.AspNetCore.Hosting")
+        .AddMeter("Microsoft.AspNetCore.Server.Kestrel")
+        .AddMeter("Microsoft.AspNetCore.Diagnostics")
+        .AddMeter("System.Net.Http")
+        .AddPrometheusExporter());
 
 var app = builder.Build();
 
@@ -73,24 +85,36 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 
-app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = WriteHealthResponse });
+// Scrapes and probes are excluded from http.server.* metrics so they do not skew API RED numbers.
+if (ObservabilityOptions.From(app.Configuration).Enabled)
+{
+    app.MapPrometheusScrapingEndpoint("/metrics").DisableHttpMetrics();
+}
+
+app.MapHealthChecks("/health", new HealthCheckOptions { ResponseWriter = WriteHealthResponse })
+    .DisableHttpMetrics();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("live"),
     ResponseWriter = WriteHealthResponse
-});
+}).DisableHttpMetrics();
 
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
     ResponseWriter = WriteHealthResponse
-});
+}).DisableHttpMetrics();
 
 app.Run();
 
 static Task WriteHealthResponse(HttpContext context, HealthReport report)
 {
+    foreach (var entry in report.Entries)
+    {
+        OrderFlowMetrics.SetHealthCheckStatus(entry.Key, entry.Value.Status);
+    }
+
     context.Response.ContentType = "application/json";
 
     var payload = new

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OrderFlow.Infrastructure.Domain;
+using OrderFlow.Infrastructure.Observability;
 
 namespace OrderFlow.Api.Middleware;
 
@@ -29,19 +30,23 @@ public sealed class ExceptionHandlingMiddleware
         }
         catch (NotFoundException ex)
         {
+            OrderFlowMetrics.RecordApiError(ex, StatusCodes.Status404NotFound);
             await WriteProblemAsync(context, StatusCodes.Status404NotFound, "Resource not found", ex.Message);
         }
         catch (InvalidStatusTransitionException ex)
         {
+            OrderFlowMetrics.RecordApiError(ex, StatusCodes.Status409Conflict);
             _logger.LogWarning("Rejected status transition: {Message}", ex.Message);
             await WriteProblemAsync(context, StatusCodes.Status409Conflict, "Invalid status transition", ex.Message);
         }
         catch (InsufficientStockException ex)
         {
+            OrderFlowMetrics.RecordApiError(ex, StatusCodes.Status409Conflict);
             await WriteProblemAsync(context, StatusCodes.Status409Conflict, "Insufficient stock", ex.Message);
         }
         catch (DbUpdateConcurrencyException ex)
         {
+            OrderFlowMetrics.RecordApiError(ex, StatusCodes.Status409Conflict);
             _logger.LogWarning(ex, "Concurrent update rejected for {Path}", context.Request.Path);
             await WriteProblemAsync(
                 context,
@@ -51,10 +56,12 @@ public sealed class ExceptionHandlingMiddleware
         }
         catch (DomainException ex)
         {
+            OrderFlowMetrics.RecordApiError(ex, StatusCodes.Status400BadRequest);
             await WriteProblemAsync(context, StatusCodes.Status400BadRequest, "Invalid request", ex.Message);
         }
         catch (Exception ex)
         {
+            OrderFlowMetrics.RecordApiError("unhandled", StatusCodes.Status500InternalServerError);
             _logger.LogError(ex, "Unhandled exception while processing {Method} {Path}",
                 context.Request.Method, context.Request.Path);
             await WriteProblemAsync(context, StatusCodes.Status500InternalServerError, "Unexpected error",

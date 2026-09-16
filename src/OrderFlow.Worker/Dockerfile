@@ -13,4 +13,6 @@ RUN dotnet publish src/OrderFlow.Worker/OrderFlow.Worker.csproj -c Release -o /a
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish ./
+# Prometheus scrape endpoint (Observability__MetricsHost / Observability__MetricsPort)
+EXPOSE 9464
 ENTRYPOINT ["dotnet", "OrderFlow.Worker.dll"]

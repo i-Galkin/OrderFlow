@@ -1,0 +1,94 @@
+// Ships stdout/stderr of the compose containers to Loki.
+//
+// The .NET services log with the JsonConsole formatter, so their lines are parsed: the level
+// becomes a label, and correlation/order/event ids become structured metadata (queryable, but
+// not indexed as labels, so they cannot explode stream cardinality).
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+discovery.relabel "compose" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "api|worker|postgres|redis|kafka|prometheus|loki|grafana|alloy"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "compose" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.relabel.compose.output
+  forward_to       = [loki.process.orderflow.receiver]
+  refresh_interval = "5s"
+}
+
+loki.process "orderflow" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.match {
+    selector = "{service_name=~\"api|worker\"}"
+
+    stage.json {
+      expressions = {
+        timestamp      = "Timestamp",
+        level          = "LogLevel",
+        category       = "Category",
+        correlation_id = "Scopes[?CorrelationId] | [0].CorrelationId",
+        order_id       = "State.OrderId",
+        event_id       = "State.EventId",
+      }
+    }
+
+    stage.template {
+      source   = "level"
+      template = "{{ ToLower .Value }}"
+    }
+
+    stage.timestamp {
+      source            = "timestamp"
+      format            = "RFC3339Nano"
+      action_on_failure = "skip"
+    }
+
+    stage.labels {
+      values = {
+        level = "",
+      }
+    }
+
+    stage.structured_metadata {
+      values = {
+        category       = "",
+        correlation_id = "",
+        order_id       = "",
+        event_id       = "",
+      }
+    }
+  }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

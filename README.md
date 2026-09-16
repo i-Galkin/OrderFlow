@@ -17,8 +17,46 @@ client -> OrderFlow.Api -> Postgres
 | `src/OrderFlow.Infrastructure` | Domain model, EF Core, Redis, Kafka, processing services |
 | `tests/OrderFlow.Tests` | Unit, integration and concurrency tests |
 
-See [docs/architecture.md](docs/architecture.md) for the full picture, [docs/issues](docs/issues)
-for the current backlog and [docs/incidents](docs/incidents) for past incident write-ups.
+See [docs/architecture.md](docs/architecture.md) for the full picture and
+[docs/incidents](docs/incidents) for past incident write-ups.
+
+## Working with Claude Code
+
+`CLAUDE.md` holds the repository guidance, and `.claude/agents/` defines eight subagents that own
+separate parts of the tree so they can work in parallel:
+
+| Agent | Writes | Database access |
+| --- | --- | --- |
+| `arch` | nothing; designs the change and splits it by owner | none |
+| `backend` | `src/**` except `Infrastructure/Persistence/**`, and `observability/**` | none: EF Core code only, no raw SQL |
+| `dba` | `Infrastructure/Persistence/**` (mapping, migrations) and raw SQL | the only agent that connects to a real database |
+| `tester` | `tests/**` | the test database created by `PostgresFixture` |
+| `debugger` | nothing; diagnoses and hands the fix to an owner | none; asks `dba` for data |
+| `reviewer` | nothing; reviews the diff | none |
+| `qa` | nothing; exercises the running stack over HTTP as a user would | none; asks `dba` for data |
+| `po` | nothing; business acceptance against the open GitHub issues | none |
+
+Running several writing agents at once needs a git worktree each, because a concurrent
+`dotnet build` in one checkout locks `bin/obj`, plus a separate test database per worktree via
+`ORDERFLOW_TEST_POSTGRES`.
+
+### The review loop
+
+`.claude/skills/review-loop/` runs the team as one automated cycle on the current branch:
+
+```
+reviewer ─┐
+          ├─> triage ─> dba ─> backend ─> tester ─> build + rebuild ─> commit ─┐
+qa ───────┘                                                                    │
+     ^                                                                         │
+     └──────────────────── repeat, max 3 iterations ───────────────────────────┘
+                                        │
+                                   exit clean ─> po (accept / followups / reject)
+```
+
+`reviewer` and `qa` run in parallel because both are read-only; fixes run strictly sequentially, so
+no worktrees are needed. The container rebuild after each round of fixes is mandatory: `qa` tests
+the image serving `:8080`, so without it every later iteration tests the previous iteration's code.
 
 ## Requirements
 
@@ -44,6 +82,14 @@ docker compose up -d postgres redis kafka
 dotnet run --project src/OrderFlow.Api
 dotnet run --project src/OrderFlow.Worker
 ```
+
+## Observability
+
+The compose file also starts Prometheus (<http://localhost:9090>), Loki, Grafana Alloy and Grafana
+(<http://localhost:3000>, `admin`/`admin`). Grafana has provisioned dashboards (Overview, Worker &
+Kafka, Logs), and Prometheus loads alert rules. The API serves metrics on `/metrics`; the worker
+serves them on port `9464`. See [docs/observability.md](docs/observability.md) for the metric
+catalogue, log queries and alert runbooks.
 
 ## Seed data
 
@@ -117,7 +163,7 @@ Unit tests always run. The integration and concurrency tests need Postgres and R
 skipped when those are not reachable. Point them somewhere else with:
 
 ```bash
-export ORDERFLOW_TEST_POSTGRES="Host=localhost;Port=5432;Database=orderflow_test;Username=orderflow;Password=orderflow"
+export ORDERFLOW_TEST_POSTGRES="Host=localhost;Port=5432;Database=orderflow_test;Username=postgres;Password=postgres"
 export ORDERFLOW_TEST_REDIS="localhost:6379"
 ```
 
@@ -143,3 +189,6 @@ Every setting can be overridden with environment variables using the usual `__` 
 | `Kafka__MaxRetryAttempts` | `3` | retries before dead lettering |
 | `Kafka__RetryBaseDelaySeconds` | `2` | base delay for the retry backoff |
 | `OrderFlow__ApplyMigrationsOnStartup` | `false` | run migrations when the API starts |
+| `Observability__Enabled` | `true` | OpenTelemetry metrics and the `/metrics` endpoint |
+| `Observability__MetricsHost` / `Observability__MetricsPort` | `localhost` / `9464` | worker metrics listener |
+| `Observability__ConsumerLagPollSeconds` | `15` | worker consumer lag sampling, `0` disables |

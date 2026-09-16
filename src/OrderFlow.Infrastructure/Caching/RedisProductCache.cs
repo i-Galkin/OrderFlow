@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OrderFlow.Contracts.Dtos;
+using OrderFlow.Infrastructure.Observability;
 using StackExchange.Redis;
 
 namespace OrderFlow.Infrastructure.Caching;
@@ -12,6 +13,8 @@ namespace OrderFlow.Infrastructure.Caching;
 /// </summary>
 public sealed class RedisProductCache : IProductCache
 {
+    private const string MetricsCacheName = "product";
+
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IConnectionMultiplexer _redis;
@@ -37,14 +40,17 @@ public sealed class RedisProductCache : IProductCache
             var value = await _redis.GetDatabase().StringGetAsync(CacheKey(productId));
             if (value.IsNullOrEmpty)
             {
+                OrderFlowMetrics.RecordCacheRequest(MetricsCacheName, OrderFlowMetrics.CacheResults.Miss);
                 return null;
             }
 
+            OrderFlowMetrics.RecordCacheRequest(MetricsCacheName, OrderFlowMetrics.CacheResults.Hit);
             return JsonSerializer.Deserialize<ProductDto>(value.ToString(), SerializerOptions);
         }
-        catch (RedisConnectionException ex)
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
         {
-            // A cache outage must not take the read path down with it.
+            // A cache outage or timeout must not take the read path down with it.
+            OrderFlowMetrics.RecordCacheRequest(MetricsCacheName, OrderFlowMetrics.CacheResults.Unavailable);
             _logger.LogWarning(ex, "Redis unavailable while reading product {ProductId}", productId);
             return null;
         }
@@ -53,10 +59,25 @@ public sealed class RedisProductCache : IProductCache
     public async Task SetAsync(ProductDto product, CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(product, SerializerOptions);
-        await _redis.GetDatabase().StringSetAsync(
-            CacheKey(product.Id),
-            payload,
-            TimeSpan.FromSeconds(_options.ProductTtlSeconds));
+        try
+        {
+            await _redis.GetDatabase().StringSetAsync(
+                CacheKey(product.Id),
+                payload,
+                TimeSpan.FromSeconds(_options.ProductTtlSeconds));
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is not a cache failure; let it propagate uncounted, as it did before
+            // this catch existed.
+            throw;
+        }
+        catch
+        {
+            // Count only; the write path stays unguarded.
+            OrderFlowMetrics.RecordCacheWriteError(MetricsCacheName);
+            throw;
+        }
     }
 
     public async Task RemoveAsync(Guid productId, CancellationToken ct = default)

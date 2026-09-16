@@ -1,0 +1,161 @@
+# Alert rules for OrderFlow. Runbook entries live in docs/observability.md under the alert name.
+groups:
+  - name: orderflow-availability
+    rules:
+      - alert: OrderFlowTargetDown
+        expr: up{job=~"orderflow-.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} metrics endpoint is unreachable"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for over a minute; the process is down or not serving /metrics."
+          runbook: "docs/observability.md#orderflowtargetdown"
+
+      - alert: ApiNotReady
+        expr: min by (check) (orderflow_health_check_status{job="orderflow-api"}) < 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API health check {{ $labels.check }} is not healthy"
+          description: "The last polled result for {{ $labels.check }} has been below Healthy for 2 minutes (value {{ $value }})."
+          runbook: "docs/observability.md#apinotready"
+
+      - alert: ApiHigh5xxRate
+        expr: |
+          sum(rate(http_server_request_duration_seconds_count{job="orderflow-api", http_response_status_code=~"5.."}[5m]))
+            /
+          sum(rate(http_server_request_duration_seconds_count{job="orderflow-api"}[5m]))
+            > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx ratio above 5%"
+          description: "{{ $value | humanizePercentage }} of API requests returned 5xx over the last 5 minutes."
+          runbook: "docs/observability.md#apihigh5xxrate"
+
+      - alert: ApiHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job="orderflow-api", http_route!=""}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency above 1s on {{ $labels.http_route }}"
+          description: "p95 for {{ $labels.http_route }} is {{ $value | humanizeDuration }}."
+          runbook: "docs/observability.md#apihighlatencyp95"
+
+      - alert: ApiConcurrencyConflictsHigh
+        expr: sum(rate(orderflow_api_errors_total{type="DbUpdateConcurrencyException"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained optimistic concurrency conflicts"
+          description: "More than one 409 Concurrent modification per second for 10 minutes ({{ $value }}/s)."
+          runbook: "docs/observability.md#apiconcurrencyconflictshigh"
+
+  - name: orderflow-pipeline
+    rules:
+      - alert: KafkaConsumerLagHigh
+        expr: sum by (topic) (orderflow_kafka_consumer_lag) > 1000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Consumer lag on {{ $labels.topic }} above 1000"
+          description: "The worker group is {{ $value }} messages behind on {{ $labels.topic }}."
+          runbook: "docs/observability.md#kafkaconsumerlaghigh"
+
+      - alert: WorkerConsumeLoopStalled
+        expr: time() - max(orderflow_worker_last_poll_seconds) > 30
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker consume loop has not polled Kafka for {{ $value | humanizeDuration }}"
+          description: "The single consume loop is blocked (retry backoff, slow handler or hang); no partition is being processed."
+          runbook: "docs/observability.md#workerconsumeloopstalled"
+
+      - alert: WorkerRetryBackoffSaturated
+        expr: sum(rate(orderflow_worker_retry_backoff_duration_seconds_sum[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker spends {{ $value | humanizePercentage }} of its time in retry backoff"
+          description: "Retry backoff runs inside the consume loop, so this is time no message is processed."
+          runbook: "docs/observability.md#workerretrybackoffsaturated"
+
+      - alert: DeadLetterRateHigh
+        expr: sum(increase(orderflow_kafka_dead_lettered_total[15m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanize }} events dead lettered in 15 minutes"
+          description: "Events are being routed to orders.failed faster than usual."
+          runbook: "docs/observability.md#deadletterratehigh"
+
+      - alert: KafkaDeliveryFailures
+        expr: sum by (job, topic) (increase(orderflow_kafka_delivery_total{result="error"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} failed to deliver events to {{ $labels.topic }}"
+          description: "The producer is fire-and-forget: every failed delivery report is an event the broker never received."
+          runbook: "docs/observability.md#kafkadeliveryfailures"
+
+      - alert: OrderFailureRatioHigh
+        expr: |
+          sum(rate(orderflow_orders_status_changes_total{status="Failed"}[15m]))
+            /
+          sum(rate(orderflow_orders_status_changes_total{status=~"Completed|Failed"}[15m]))
+            > 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 20% of processed orders are failing"
+          description: "{{ $value | humanizePercentage }} of orders finishing in the last 15 minutes ended Failed."
+          runbook: "docs/observability.md#orderfailureratiohigh"
+
+      - alert: ConsumerLagMonitorStale
+        expr: |
+          (time() - max(orderflow_kafka_consumer_lag_last_sample_seconds) > 120)
+            or
+          (absent(orderflow_kafka_consumer_lag_last_sample_seconds) and on() (max(up{job="orderflow-worker"}) == 1))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag has not been sampled recently"
+          description: "KafkaLagMonitor in the worker cannot read offsets, so KafkaConsumerLagHigh cannot fire."
+          runbook: "docs/observability.md#consumerlagmonitorstale"
+
+  - name: orderflow-dependencies
+    rules:
+      - alert: ProductCacheUnavailable
+        expr: sum(rate(orderflow_cache_requests_total{result="unavailable"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Product cache reads are failing over to Postgres"
+          description: "Redis connection errors on cache reads for 5 minutes ({{ $value }}/s)."
+          runbook: "docs/observability.md#productcacheunavailable"
+
+      - alert: KafkaClientErrors
+        expr: sum by (job, client) (increase(orderflow_kafka_client_errors_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} Kafka {{ $labels.client }} is reporting errors"
+          description: "{{ $value | humanize }} librdkafka errors in 5 minutes; usually broker connectivity."
+          runbook: "docs/observability.md#kafkaclienterrors"
