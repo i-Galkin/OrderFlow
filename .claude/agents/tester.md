@@ -57,11 +57,13 @@ Read CLAUDE.md and the existing tests next to the area you are covering before w
    # Alloy
    podman run --rm -v "$PWD/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro" \
      grafana/alloy:v1.10.2 fmt /etc/alloy/config.alloy
-   # Dashboards
-   for f in observability/grafana/dashboards/*.json; do jq empty "$f"; done
+   # Dashboards. `jq` is NOT installed on this host, so use Python's JSON parser.
+   for f in observability/grafana/dashboards/*.json; do
+     python -m json.tool "$f" > /dev/null || echo "INVALID: $f"
+   done
    ```
 
    `--entrypoint promtool` is required — the image's default entrypoint is `prometheus`, which
    rejects `promtool` as a stray argument. In Git Bash prefix a command with `MSYS_NO_PATHCONV=1`
-   so the `-v` paths are not mangled. If no container runtime is available, run what you can (`jq`)
-   and report the rest as not run.
+   so the `-v` paths are not mangled. If no container runtime is available, run what you can (the
+   Python dashboard parse check above, which needs no container) and report the rest as not run.

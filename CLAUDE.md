@@ -195,6 +195,13 @@ deterministic, since the tests rely on it.
 | `tester` | `tests/**` | fixture-managed test database only |
 | `debugger` | nothing (diagnoses) | none; asks `dba` for data |
 | `reviewer` | nothing (reviews diffs) | none |
+| `qa` | nothing (exercises the running stack over HTTP) | none; asks `dba` for data |
+| `po` | nothing (business acceptance against the GitHub issues) | none |
 
 When writers run at the same time, give each its own git worktree (concurrent `dotnet build` in one
 checkout locks `bin/obj`) and its own test database via `ORDERFLOW_TEST_POSTGRES`.
+
+`.claude/skills/review-loop/` drives the whole team as one automated cycle: review and manual test
+in parallel, then sequential fixes, a build-and-rebuild gate, and a business acceptance pass. The
+rebuild step is load-bearing — `qa` tests the container image on `:8080`, so a fix in `src/**` is
+invisible to it until `podman compose up -d --build api worker` runs.

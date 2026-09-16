@@ -22,7 +22,7 @@ See [docs/architecture.md](docs/architecture.md) for the full picture and
 
 ## Working with Claude Code
 
-`CLAUDE.md` holds the repository guidance, and `.claude/agents/` defines six subagents that own
+`CLAUDE.md` holds the repository guidance, and `.claude/agents/` defines eight subagents that own
 separate parts of the tree so they can work in parallel:
 
 | Agent | Writes | Database access |
@@ -33,10 +33,30 @@ separate parts of the tree so they can work in parallel:
 | `tester` | `tests/**` | the test database created by `PostgresFixture` |
 | `debugger` | nothing; diagnoses and hands the fix to an owner | none; asks `dba` for data |
 | `reviewer` | nothing; reviews the diff | none |
+| `qa` | nothing; exercises the running stack over HTTP as a user would | none; asks `dba` for data |
+| `po` | nothing; business acceptance against the open GitHub issues | none |
 
 Running several writing agents at once needs a git worktree each, because a concurrent
 `dotnet build` in one checkout locks `bin/obj`, plus a separate test database per worktree via
 `ORDERFLOW_TEST_POSTGRES`.
+
+### The review loop
+
+`.claude/skills/review-loop/` runs the team as one automated cycle on the current branch:
+
+```
+reviewer ─┐
+          ├─> triage ─> dba ─> backend ─> tester ─> build + rebuild ─> commit ─┐
+qa ───────┘                                                                    │
+     ^                                                                         │
+     └──────────────────── repeat, max 3 iterations ───────────────────────────┘
+                                        │
+                                   exit clean ─> po (accept / followups / reject)
+```
+
+`reviewer` and `qa` run in parallel because both are read-only; fixes run strictly sequentially, so
+no worktrees are needed. The container rebuild after each round of fixes is mandatory: `qa` tests
+the image serving `:8080`, so without it every later iteration tests the previous iteration's code.
 
 ## Requirements
 
