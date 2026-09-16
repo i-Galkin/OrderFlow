@@ -23,16 +23,21 @@ to verify against the code, not as facts.
    * asynchronous: `KafkaOrderEventPublisher` → `OrderEventConsumer` → `OrderEventProcessor` →
      `FakeInventoryService` / `FakePaymentService`
 2. **Reproduce through the application where you can.**
-   * Run `dotnet run --project src/OrderFlow.Api` / `src/OrderFlow.Worker`, or read
-     `docker compose logs api worker`. The apps log JSON to stdout.
+   * Run `dotnet run --project src/OrderFlow.Api` / `src/OrderFlow.Worker`, or read the container
+     logs with `podman compose logs api worker` (Docker hosts: `docker compose logs api worker`;
+     either runtime also allows `podman logs claude-vibing-v3-api-1` / `docker logs ...` for a
+     single container). On this machine the runtime is Podman. The apps log JSON to stdout.
    * Use HTTP calls with an `X-Correlation-ID` you choose. Metrics are at `:8080/metrics` and
-     `:9464/metrics`.
+     `:9464/metrics` — but note the worker's `9464` is **not** published to the host in
+     `docker-compose.yml`, so reach it from inside the network (Prometheus at `:9090` scrapes it)
+     rather than curling `localhost:9464`.
    * Seeded fixture SKUs (`SKU-DECLINE-13`, `SKU-TIMEOUT-77`, `SKU-SCARCE-01`, `SKU-HIGHVALUE-01`)
      exercise the payment and stock branches deterministically.
    * A targeted unit test run is also fine.
-3. **If Docker is unavailable** (it may be on this machine) and Postgres, Redis or Kafka are
-   unreachable, say so and fall back to reading code and running unit tests. Integration tests skip
-   without Postgres/Redis, so a passing run is not evidence.
+3. **If the container runtime is unavailable** (Podman here, Docker elsewhere) and Postgres, Redis
+   or Kafka are unreachable, say so and fall back to reading code and running unit tests. Check with
+   `podman ps` (or `docker ps`) before concluding the stack is down. Integration tests skip without
+   Postgres/Redis, so a passing run is not evidence.
 4. **Pin down the location.** Trace the cause to exact file paths and line numbers under `src/`.
    Separate what you proved (a reproduction, a log line, a metric, a `dba` query result) from what
    you inferred from reading code.

@@ -19,18 +19,30 @@ You are the DBA for OrderFlow. Read CLAUDE.md first.
 * Do not edit `tests/`, controllers, or domain behaviour.
 
 ## Working with the database
-* Engine: PostgreSQL 16. Dev database `orderflow` (user/password `orderflow`, `localhost:5432`,
+* Engine: PostgreSQL 16. Dev database `orderflow` (user/password `postgres`, `localhost:5432`,
   from `appsettings.json` and `docker-compose.yml`). Tests use `orderflow_test` or whatever
   `ORDERFLOW_TEST_POSTGRES` names.
-* `psql` is not installed on the host; use `docker compose exec postgres psql -U orderflow -d orderflow -c "..."`.
-  If Docker or Postgres is unavailable, say so and stop; do not guess data.
+* `psql` is not installed on the host, so run it inside the Postgres container. Both runtimes work;
+  use whichever this machine has:
+  * Podman: `podman compose exec postgres psql -U postgres -d orderflow -c "..."`
+  * Docker: `docker compose exec postgres psql -U postgres -d orderflow -c "..."`
+
+  On **this** machine containers run on Podman, and `DOCKER_HOST` is unset, so a bare
+  `docker-compose` call silently does nothing — prefer the `podman` forms here. Talking to the
+  container directly also works and sidesteps compose entirely:
+  `podman exec -e PGPASSWORD=postgres claude-vibing-v3-postgres-1 psql -U postgres -d orderflow -c "..."`.
+  If no container runtime or Postgres is available, say so and stop; do not guess data.
 * Tables are snake_case, columns are quoted PascalCase: `SELECT "Id", "StockQuantity" FROM products`.
   `orders."Status"` is an int: Pending=0, Confirmed=1, Processing=2, Completed=3, Cancelled=4,
   Failed=5 (`OrderFlow.Contracts/OrderStatus.cs`; the values are a database contract, never reorder).
 * Migrations: `dotnet ef migrations add <Name> -p src/OrderFlow.Infrastructure -s src/OrderFlow.Infrastructure -o Persistence/Migrations`
   and `dotnet ef database update -p src/OrderFlow.Infrastructure -s src/OrderFlow.Infrastructure`.
   Only one migration may be in flight at a time. Never hand-edit the model snapshot.
-* Seeding: `dotnet run --project src/OrderFlow.Api -- --seed` (no-op if customers exist).
+* Seeding: `dotnet run --project src/OrderFlow.Api -- --seed` (no-op if customers exist). Without a
+  host SDK, the same thing runs from the built image against the compose network:
+  `podman run --rm --network claude-vibing-v3_default -e ConnectionStrings__Postgres="Host=postgres;Port=5432;Database=orderflow;Username=postgres;Password=postgres" localhost/claude-vibing-v3-api:latest --seed`
+  (`docker run` with the same arguments on a Docker host). It migrates first, so do not run it
+  concurrently with an API that is also applying migrations.
 * Performance: use `EXPLAIN (ANALYZE, BUFFERS)` on the SQL EF actually generates. Confirm the plan
   before proposing an index, and report the before/after numbers.
 

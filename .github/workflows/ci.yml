@@ -20,8 +20,8 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: orderflow
-          POSTGRES_PASSWORD: orderflow
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: orderflow
         ports:
           - 5432:5432
@@ -75,7 +75,7 @@ jobs:
 
       - name: Test
         env:
-          ORDERFLOW_TEST_POSTGRES: "Host=localhost;Port=5432;Database=orderflow_test;Username=orderflow;Password=orderflow"
+          ORDERFLOW_TEST_POSTGRES: "Host=localhost;Port=5432;Database=orderflow_test;Username=postgres;Password=postgres"
           ORDERFLOW_TEST_REDIS: "localhost:6379"
           ORDERFLOW_TEST_KAFKA: "localhost:9092"
         run: >

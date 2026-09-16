@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: orderflow
-      POSTGRES_PASSWORD: orderflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: orderflow
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U orderflow -d orderflow"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d orderflow"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -65,7 +65,7 @@ services:
         condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=orderflow;Username=orderflow;Password=orderflow;Maximum Pool Size=30"
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=orderflow;Username=postgres;Password=postgres;Maximum Pool Size=30"
       Redis__Configuration: "redis:6379"
       Kafka__BootstrapServers: "kafka:29092"
       OrderFlow__ApplyMigrationsOnStartup: "true"
@@ -94,7 +94,7 @@ services:
         condition: service_started
     environment:
       DOTNET_ENVIRONMENT: Production
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=orderflow;Username=orderflow;Password=orderflow;Maximum Pool Size=30"
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=orderflow;Username=postgres;Password=postgres;Maximum Pool Size=30"
       Redis__Configuration: "redis:6379"
       Kafka__BootstrapServers: "kafka:29092"
       Observability__Enabled: "true"

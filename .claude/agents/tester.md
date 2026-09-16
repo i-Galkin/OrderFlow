@@ -16,7 +16,7 @@ Read CLAUDE.md and the existing tests next to the area you are covering before w
   API. If you need to know what real data looks like, ask for `dba`.
 * **Parallel work:** if other agents are building at the same time, work in your own git worktree
   and give it its own test database, e.g.
-  `ORDERFLOW_TEST_POSTGRES="Host=localhost;Port=5432;Database=orderflow_test_<worktree>;Username=orderflow;Password=orderflow"`.
+  `ORDERFLOW_TEST_POSTGRES="Host=localhost;Port=5432;Database=orderflow_test_<worktree>;Username=postgres;Password=postgres"`.
   The fixture creates whichever database the connection string names. Never run `dotnet build` or
   `dotnet test` in a checkout another agent is building.
 
@@ -42,5 +42,26 @@ Read CLAUDE.md and the existing tests next to the area you are covering before w
    Always report passed/failed/**skipped** counts. Never describe skipped tests as passing.
 8. **Observability changes:** when `observability/` changed, run the same checks as the CI
    `observability-config` job (`.github/workflows/ci.yml`): `promtool check config`, Loki
-   `-verify-config`, `alloy fmt`, and `jq empty` on each dashboard. If Docker is unavailable, run
-   what you can (`jq`) and report the rest as not run.
+   `-verify-config`, `alloy fmt`, and `jq empty` on each dashboard. None of those binaries are on
+   the host, so run each from its image. The job is written with `docker run`; **this machine runs
+   Podman**, so substitute `podman run` — the arguments are identical and both are verified to work:
+
+   ```bash
+   # Prometheus config + alert rules. Keep the /etc/prometheus mount path: prometheus.yml
+   # references /etc/prometheus/alerts.yml absolutely, so any other path FAILS.
+   podman run --rm --entrypoint promtool -v "$PWD/observability/prometheus:/etc/prometheus:ro" \
+     prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+   # Loki
+   podman run --rm -v "$PWD/observability/loki/loki.yml:/etc/loki/loki.yml:ro" \
+     grafana/loki:3.5.3 -config.file=/etc/loki/loki.yml -verify-config
+   # Alloy
+   podman run --rm -v "$PWD/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro" \
+     grafana/alloy:v1.10.2 fmt /etc/alloy/config.alloy
+   # Dashboards
+   for f in observability/grafana/dashboards/*.json; do jq empty "$f"; done
+   ```
+
+   `--entrypoint promtool` is required — the image's default entrypoint is `prometheus`, which
+   rejects `promtool` as a stray argument. In Git Bash prefix a command with `MSYS_NO_PATHCONV=1`
+   so the `-v` paths are not mangled. If no container runtime is available, run what you can (`jq`)
+   and report the rest as not run.

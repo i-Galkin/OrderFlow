@@ -143,7 +143,7 @@ Unit tests always run. The integration and concurrency tests need Postgres and R
 skipped when those are not reachable. Point them somewhere else with:
 
 ```bash
-export ORDERFLOW_TEST_POSTGRES="Host=localhost;Port=5432;Database=orderflow_test;Username=orderflow;Password=orderflow"
+export ORDERFLOW_TEST_POSTGRES="Host=localhost;Port=5432;Database=orderflow_test;Username=postgres;Password=postgres"
 export ORDERFLOW_TEST_REDIS="localhost:6379"
 ```
 
